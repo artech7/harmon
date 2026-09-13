@@ -124,12 +124,13 @@ with ffmpeg, then exercises scan, dedupe, staging, approval, apply and convert.
 
 The rail header carries both apps side by side, the same way Tephra and Crucible
 do — the app you are in reads bright, the other stays dim until you reach for
-it. To make the Forge button work, set its address near the bottom of
-`web/index.html`:
+it. Set your Forge address under Settings → Switching to Forge, or seed it with the
+`HARMON_FORGE_URL` environment variable. The button greys out until it is set.
 
-```html
-window.FORGE_URL = 'https://forge.yourdomain.tld';
-```
+The link only runs one way: Harmon knows where Forge is, not the reverse. To get
+back, add the same rail header to Forge's own page — the markup is the `.apps`
+block in `web/index.html` and the `.app` / `.orb` rules in `web/app.css`, with
+the active class moved to Forge.
 
 Nothing in `app/` assumes it is the only tenant, so folding both into one shared
 shell later is a `web/` change, not a backend one.

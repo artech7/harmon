@@ -53,6 +53,7 @@ def status():
         "WHERE m.keeper=0 AND g.kind<>'cross_album'"
     )["n"]
     return {
+        "shell": config.get()["shell"],
         "library": dict(stats),
         "duplicates": {k: (v or 0) for k, v in dict(dupe_stats).items()},
         "reclaimable_bytes": reclaimable,

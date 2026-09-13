@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import copy
+import os
 from typing import Any
 
 from . import db
@@ -65,6 +66,11 @@ FFMPEG_ENCODER = {
 ENRICH_FIELDS = ["artist", "album_artist", "album", "title", "track_no", "disc_no", "year", "genre"]
 
 DEFAULTS: dict[str, Any] = {
+    "shell": {
+        # Address of your Forge instance, so the rail can switch between the two
+        # apps. Settable in the UI; this is just the starting value.
+        "forge_url": os.environ.get("HARMON_FORGE_URL", ""),
+    },
     "target": {
         "codec": "aac",
         "bitrate": 256,

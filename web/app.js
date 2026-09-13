@@ -124,6 +124,10 @@ async function poll() {
   $('#btn-scan').disabled = busy;
   $('#btn-pipeline').disabled = busy;
 
+  const forgeBtn = $('.app[data-app="forge"]');
+  forgeBtn.classList.toggle('is-unset', !s.shell?.forge_url);
+  forgeBtn.title = s.shell?.forge_url || 'Set your Forge address in Settings';
+
   $('#rail-count').textContent = s.library.tracks
     ? `${num(s.library.tracks)} tracks`
     : 'No music yet';
@@ -675,6 +679,19 @@ async function viewSettings() {
 
   const wrap = el('div', { class: 'grid' });
 
+  /* Shell */
+  wrap.append(el('div', { class: 'card' },
+    el('h2', {}, 'Switching to Forge'),
+    el('p', {}, 'The address of your Forge instance. Once this is set, the Forge button at the top of the rail switches over to it.'),
+    el('div', { class: 'field' },
+      el('label', {}, 'Forge address'),
+      el('input', {
+        type: 'text', value: cfg.shell?.forge_url || '',
+        placeholder: 'https://forge.yourdomain.tld',
+        onchange: (e) => save({ shell: { forge_url: e.target.value.trim() } }, true),
+      }),
+      el('small', {}, 'Include https:// and no trailing slash. Leave it empty to grey the button out.'))));
+
   /* Libraries */
   const libList = el('div', { class: 'rows' },
     status.libraries.length
@@ -870,9 +887,10 @@ $('#btn-pipeline').addEventListener('click', async () => {
 });
 
 $('.app[data-app="forge"]').addEventListener('click', () => {
-  const url = window.FORGE_URL;
+  const url = state.status?.shell?.forge_url;
   if (url) { window.location.href = url; return; }
-  toast('Set FORGE_URL in the page to point this at your Forge instance.');
+  toast('Add your Forge address in Settings and this will switch over to it.');
+  location.hash = '#/settings';
 });
 
 window.addEventListener('unhandledrejection', (e) => {

@@ -131,6 +131,7 @@ body {
 }
 
 .app:hover { color: rgba(243, 240, 248, 0.72); }
+.app.is-unset { opacity: 0.45; }
 .app.is-active { color: var(--ink); }
 
 .orb {
