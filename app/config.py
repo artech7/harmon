@@ -70,6 +70,8 @@ DEFAULTS: dict[str, Any] = {
         # Address of your Forge instance, so the rail can switch between the two
         # apps. Settable in the UI; this is just the starting value.
         "forge_url": os.environ.get("HARMON_FORGE_URL", ""),
+        # nightfall | vinyl | airwave | velvet
+        "theme": "nightfall",
     },
     "target": {
         "codec": "aac",

@@ -124,13 +124,13 @@ with ffmpeg, then exercises scan, dedupe, staging, approval, apply and convert.
 
 The rail header carries both apps side by side, the same way Tephra and Crucible
 do — the app you are in reads bright, the other stays dim until you reach for
-it. Set your Forge address under Settings → Switching to Forge, or seed it with the
-`HARMON_FORGE_URL` environment variable. The button greys out until it is set.
+it. Set your Forge address under Settings → Link to Forge, or seed it with the
+`HARMON_FORGE_URL` environment variable.
 
-The link only runs one way: Harmon knows where Forge is, not the reverse. To get
-back, add the same rail header to Forge's own page — the markup is the `.apps`
-block in `web/index.html` and the `.app` / `.orb` rules in `web/app.css`, with
-the active class moved to Forge.
+Harmon borrows Forge's design system — liquid glass with the masked rim, top
+tabs, background art painted per theme — with its own palettes (nightfall,
+vinyl, airwave, velvet), its own type, and its own mark. The variable names
+match Forge's, so a component moved between the two re-skins itself.
 
 Nothing in `app/` assumes it is the only tenant, so folding both into one shared
 shell later is a `web/` change, not a backend one.

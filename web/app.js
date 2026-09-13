@@ -1,6 +1,8 @@
-/* Harmon front end. Vanilla, hash-routed, one file. */
+/* Harmon front end. Vanilla, tab-switched, one file. */
 
 const $ = (sel, root = document) => root.querySelector(sel);
+const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
+
 const el = (tag, attrs = {}, ...kids) => {
   const node = document.createElement(tag);
   for (const [k, v] of Object.entries(attrs)) {
@@ -17,7 +19,7 @@ const el = (tag, attrs = {}, ...kids) => {
   return node;
 };
 
-const state = { status: null, config: null, codecs: null, view: 'overview' };
+const state = { status: null, config: null, codecs: null, tab: 'overview' };
 
 /* --- helpers ----------------------------------------------------------- */
 
@@ -34,7 +36,7 @@ async function api(path, options = {}) {
 }
 
 function toast(message, bad = false) {
-  const node = el('div', { class: 'toast' + (bad ? ' is-bad' : '') }, message);
+  const node = el('div', { class: 'toast' + (bad ? ' bad' : '') }, message);
   $('#toasts').append(node);
   setTimeout(() => node.remove(), 5200);
 }
@@ -53,56 +55,109 @@ const hours = (seconds) => {
   return h >= 24 ? `${Math.floor(h / 24)}d ${h % 24}h` : `${h}h`;
 };
 
-const CODEC_COLOR = {
-  FLAC: '#6FE3C4', ALAC: '#57C8E8', AAC: '#A98BFF', MP3: '#FF9057',
-  OPUS: '#F2C14E', VORBIS: '#E86A9B', WAV: '#8CE0A0', WMA: '#7A8CA8',
-};
-const colorFor = (codec) => CODEC_COLOR[codec] || '#6F6A80';
-
 const basename = (p) => (p || '').split('/').pop();
 
-/* --- routing ----------------------------------------------------------- */
+const CODEC_COLOR = {
+  FLAC: '#6FE3C4', ALAC: '#57C8E8', AAC: '#A98BFF', MP3: '#F2B03D',
+  OPUS: '#E878C0', VORBIS: '#FF9D42', WAV: '#8CE0A0', WMA: '#7A8CA8',
+};
+const colorFor = (c) => CODEC_COLOR[c] || '#6F6A80';
 
-const VIEWS = {
-  overview:    { title: 'Overview',      sub: 'What Harmon has found in your library.' },
-  duplicates:  { title: 'Duplicates',    sub: 'Copies of the same song. Ones on different albums are left alone.' },
-  metadata:    { title: 'Metadata',      sub: 'Artists, albums, genres and artwork, filled in from four sources.' },
-  standardize: { title: 'Format',        sub: 'Pick the codec and bitrate you want, and Harmon brings everything to it.' },
-  review:      { title: 'Review',        sub: 'Nothing is written to your files until you approve it here.' },
-  settings:    { title: 'Settings',      sub: 'Folders, lookup sources and how much Harmon does on its own.' },
+/* Card and stat builders, so every panel speaks the same vocabulary. */
+const card = (title, lede, ...body) =>
+  el('section', { class: 'glass card' },
+    title && el('h3', {}, title),
+    lede && el('p', { class: 'lede' }, lede),
+    ...body);
+
+const stat = (label, value, note, tone) =>
+  el('div', { class: 'glass stat' + (tone ? ' ' + tone : '') },
+    el('div', { class: 'k' }, label),
+    el('div', { class: 'v' }, value),
+    note && el('div', { class: 'n' }, note));
+
+const chip = (text, tone) => el('span', { class: 'chip' + (tone ? ' ' + tone : '') }, text);
+
+const swRow = (title, blurb, checked, onchange) =>
+  el('label', { class: 'sw' },
+    el('input', { type: 'checkbox', checked: !!checked, onchange: (e) => onchange(e.target.checked) }),
+    el('span', {}, el('b', {}, title), el('small', {}, blurb)));
+
+/* --- themes ------------------------------------------------------------ */
+
+const THEMES = [
+  ['nightfall', 'Nightfall', '#241a44', 'A dark listening room'],
+  ['vinyl', 'Vinyl', '#3a2411', 'A record under a desk lamp'],
+  ['airwave', 'Airwave', '#12354f', 'A signal coming in over the air'],
+  ['velvet', 'Velvet', '#3a1338', 'A club at two in the morning'],
+];
+
+function applyTheme(name) {
+  document.documentElement.setAttribute('data-theme', name || 'nightfall');
+  $$('#themepick button').forEach((b) => b.classList.toggle('on', b.dataset.theme === name));
+}
+
+function buildThemePicker() {
+  const host = $('#themepick');
+  host.innerHTML = '';
+  THEMES.forEach(([key, label, swatch, blurb]) => {
+    host.append(el('button', {
+      'data-theme': key, title: `${label} — ${blurb}`, 'aria-label': label,
+      style: `background:${swatch}`,
+      onclick: async () => {
+        applyTheme(key);
+        await api('/config', { method: 'PUT', body: { shell: { theme: key } } });
+      },
+    }));
+  });
+}
+
+/* --- tabs -------------------------------------------------------------- */
+
+const TABS = {
+  overview: viewOverview,
+  duplicates: viewDuplicates,
+  metadata: viewMetadata,
+  format: viewFormat,
+  review: viewReview,
+  settings: viewSettings,
 };
 
-function route() {
-  const name = (location.hash.replace('#/', '') || 'overview').split('?')[0];
-  state.view = VIEWS[name] ? name : 'overview';
-  const meta = VIEWS[state.view];
-  $('#view-title').textContent = meta.title;
-  $('#view-sub').textContent = meta.sub;
-  document.querySelectorAll('#nav a').forEach((a) =>
-    a.classList.toggle('is-current', a.dataset.view === state.view));
-  render();
+const SUBTITLE = {
+  overview: 'music library',
+  duplicates: 'copies of the same song',
+  metadata: 'artists, albums, genres, artwork',
+  format: 'codec and bitrate',
+  review: 'nothing is written until you approve it',
+  settings: 'folders, sources, automation',
+};
+
+async function switchTab(name, animate = true) {
+  if (!TABS[name]) name = 'overview';
+  state.tab = name;
+  location.hash = '#/' + name;
+  $('#subtitle').textContent = SUBTITLE[name];
+  $$('.toptab').forEach((b) => b.classList.toggle('on', b.dataset.tab === name));
+
+  const panels = $$('.tabpanel');
+  panels.forEach((p) => {
+    p.classList.remove('active', 'entering');
+    if (p.dataset.panel === name) p.classList.add('active', ...(animate ? ['entering'] : []));
+  });
+  await render();
 }
 
 async function render() {
-  const host = $('#view');
-  host.innerHTML = '';
-  host.append(el('div', { class: 'empty' }, 'Loading…'));
+  const panel = $(`.tabpanel[data-panel="${state.tab}"]`);
+  if (!panel) return;
+  if (!panel.childElementCount) panel.append(el('div', { class: 'empty' }, 'Loading…'));
   try {
-    const node = await ({
-      overview: viewOverview,
-      duplicates: viewDuplicates,
-      metadata: viewMetadata,
-      standardize: viewStandardize,
-      review: viewReview,
-      settings: viewSettings,
-    })[state.view]();
-    host.innerHTML = '';
-    host.append(node);
+    const node = await TABS[state.tab]();
+    panel.innerHTML = '';
+    panel.append(node);
   } catch (err) {
-    host.innerHTML = '';
-    host.append(el('div', { class: 'card' },
-      el('h2', {}, 'That screen could not load'),
-      el('p', {}, err.message)));
+    panel.innerHTML = '';
+    panel.append(card('That panel could not load', err.message));
   }
 }
 
@@ -114,27 +169,18 @@ async function poll() {
   try {
     state.status = await api('/status');
   } catch { return; }
-
   const s = state.status;
-  const worker = $('#worker');
+
   const busy = Boolean(s.worker.kind);
-  worker.classList.toggle('is-busy', busy);
-  $('.worker-text', worker).textContent = busy ? s.worker.message : 'Idle';
+  $('#dot').classList.toggle('live', busy);
+  $('#worker-text').textContent = busy ? s.worker.message : 'Idle';
   $('#worker-bar').style.width = busy ? `${Math.round(s.worker.progress * 100)}%` : '0%';
   $('#btn-scan').disabled = busy;
   $('#btn-pipeline').disabled = busy;
 
-  const forgeBtn = $('.app[data-app="forge"]');
-  forgeBtn.classList.toggle('is-unset', !s.shell?.forge_url);
-  forgeBtn.title = s.shell?.forge_url || 'Set your Forge address in Settings';
-
-  $('#rail-count').textContent = s.library.tracks
-    ? `${num(s.library.tracks)} tracks`
-    : 'No music yet';
-
-  const pending = s.changes.pending || 0;
-  $('#badge-review').textContent = pending || '';
-  $('#badge-dupes').textContent = (s.duplicates.same_album || 0) + (s.duplicates.identical || 0) || '';
+  $('#badge-review').textContent = s.changes.pending || '';
+  $('#badge-dupes').textContent =
+    (s.duplicates.same_album || 0) + (s.duplicates.identical || 0) || '';
   $('#badge-format').textContent = s.changes.by_kind?.convert || '';
 
   if (lastWorkerKind && !s.worker.kind) {
@@ -152,32 +198,30 @@ async function viewOverview() {
   ]);
   state.status = s;
   const lib = s.library;
-  const wrap = el('div', { class: 'grid' });
+  const frag = document.createDocumentFragment();
 
   if (!s.libraries.length) {
-    wrap.append(el('div', { class: 'card' },
-      el('h2', {}, 'Point Harmon at your music'),
-      el('p', {}, 'Add the folder your library lives in and Harmon will read every file, group the duplicates and check the tags. It will not change anything until you say so.'),
-      el('button', { class: 'btn btn-primary', onclick: () => (location.hash = '#/settings') },
-        'Add a music folder')));
-    return wrap;
+    frag.append(card('Point Harmon at your music',
+      'Add the folder your library lives in and Harmon reads every file, groups the duplicates and checks the tags. It changes nothing until you say so.',
+      el('button', { class: 'go', onclick: () => switchTab('settings') }, 'Add a music folder')));
+    return frag;
   }
 
-  /* Hero: the library drawn as a band of codecs, widest format first. */
-  const codecs = Object.entries(format.by_codec).sort((a, b) => b[1] - a[1]);
-  const totalFiles = codecs.reduce((n, [, v]) => n + v, 0) || 1;
+  frag.append(el('div', { class: 'stats' },
+    stat('Tracks', num(lib.tracks)),
+    stat('Albums', num(lib.albums)),
+    stat('Artists', num(lib.artists)),
+    stat('On disk', bytes(lib.bytes)),
+    stat('Playing time', hours(lib.seconds))));
 
-  wrap.append(el('div', { class: 'card hero' },
-    el('div', { class: 'hero-figures' },
-      el('div', { class: 'figure' }, el('strong', {}, num(lib.tracks)), el('span', {}, 'tracks')),
-      el('div', { class: 'figure' }, el('strong', {}, num(lib.albums)), el('span', {}, 'albums')),
-      el('div', { class: 'figure' }, el('strong', {}, num(lib.artists)), el('span', {}, 'artists')),
-      el('div', { class: 'figure' }, el('strong', {}, bytes(lib.bytes)), el('span', {}, 'on disk')),
-      el('div', { class: 'figure' }, el('strong', {}, hours(lib.seconds)), el('span', {}, 'of music')),
-    ),
+  /* The library drawn as a band of codecs, widest format first. */
+  const codecs = Object.entries(format.by_codec).sort((a, b) => b[1] - a[1]);
+  const total = codecs.reduce((n, [, v]) => n + v, 0) || 1;
+
+  frag.append(card('What your library is made of', null,
     el('div', { class: 'spectrum' },
       codecs.map(([name, count]) => {
-        const pct = (count / totalFiles) * 100;
+        const pct = (count / total) * 100;
         return el('span', {
           style: `width:${pct}%;background:${colorFor(name)}`,
           title: `${name}: ${num(count)} files`,
@@ -185,114 +229,88 @@ async function viewOverview() {
       })),
     el('div', { class: 'spectrum-key' },
       codecs.map(([name, count]) => el('span', {},
-        el('i', { style: `background:${colorFor(name)}` }), `${name} ${num(count)}`))),
-  ));
+        el('i', { style: `background:${colorFor(name)}` }), `${name} ${num(count)}`)))));
 
-  const tiles = el('div', { class: 'grid grid-4' },
-    el('div', { class: 'tile ' + (s.duplicates.same_album ? 'is-hot' : 'is-good') },
-      el('strong', {}, num(s.duplicates.same_album + s.duplicates.identical)),
-      el('span', {}, 'duplicate sets'),
-      el('small', {}, s.reclaimable_bytes ? `${bytes(s.reclaimable_bytes)} to reclaim` : 'Nothing to clean up')),
-    el('div', { class: 'tile ' + (format.needs_convert ? 'is-hot' : 'is-good') },
-      el('strong', {}, num(format.needs_convert)),
-      el('span', {}, 'files off your target format'),
-      el('small', {}, `${num(format.matching)} already match`)),
-    el('div', { class: 'tile' },
-      el('strong', {}, num(lib.no_art)),
-      el('span', {}, 'tracks with no artwork'),
-      el('small', {}, 'Harmon can fetch covers for these')),
-    el('div', { class: 'tile' },
-      el('strong', {}, num(lib.no_genre)),
-      el('span', {}, 'tracks with no genre'),
-      el('small', {}, 'Filled in from Last.fm, Discogs or Spotify')),
-  );
-  wrap.append(tiles);
+  frag.append(el('div', { class: 'stats' },
+    stat('Duplicate sets', num(s.duplicates.same_album + s.duplicates.identical),
+      s.reclaimable_bytes ? `${bytes(s.reclaimable_bytes)} to reclaim` : 'Nothing to clean up',
+      s.duplicates.same_album ? 'hot' : 'good'),
+    stat('Off target format', num(format.needs_convert),
+      `${num(format.matching)} already match`, format.needs_convert ? 'hot' : 'good'),
+    stat('No artwork', num(lib.no_art), 'Harmon can fetch covers'),
+    stat('No genre', num(lib.no_genre), 'Filled from Last.fm, Discogs, Spotify')));
 
   if (s.changes.pending) {
-    wrap.append(el('div', { class: 'card' },
-      el('h2', {}, `${num(s.changes.pending)} changes are waiting on you`),
-      el('p', {}, 'Harmon has staged these but written nothing. Look them over and approve the ones you want.'),
-      el('button', { class: 'btn btn-primary', onclick: () => (location.hash = '#/review') },
-        'Review changes')));
+    frag.append(card(`${num(s.changes.pending)} changes are waiting on you`,
+      'Harmon has staged these and written nothing. Look them over and approve what you want.',
+      el('button', { class: 'go', onclick: () => switchTab('review') }, 'Review changes')));
   }
 
   if (!s.ffmpeg) {
-    wrap.append(el('div', { class: 'card' },
-      el('h2', {}, 'ffmpeg is missing'),
-      el('p', {}, 'Scanning, duplicate detection and metadata all work without it, but Harmon cannot convert files until ffmpeg is on the path inside the container.')));
+    frag.append(card('ffmpeg is missing',
+      'Scanning, duplicates and metadata all work without it, but Harmon cannot convert anything until ffmpeg is on the path inside the container.'));
   }
 
-  wrap.append(el('div', { class: 'card' },
-    el('h2', {}, 'Recent activity'),
+  frag.append(card('Recent activity', null,
     el('div', { class: 'log' },
-      activity.length ? activity.map((a) => el('div', { class: 'is-' + a.level },
-        el('time', {}, a.created_at.slice(5, 16)),
-        el('span', {}, a.message)))
+      activity.length
+        ? activity.map((a) => el('div', { class: a.level },
+            el('time', {}, a.created_at.slice(5, 16)), el('span', {}, a.message)))
         : el('div', {}, 'Nothing has happened yet.'))));
 
-  return wrap;
+  return frag;
 }
 
 /* --- duplicates -------------------------------------------------------- */
 
-let dupeTab = 'same_album';
+let dupeKind = 'same_album';
 
 async function viewDuplicates() {
-  const groups = await api('/dupes?kind=' + dupeTab + '&limit=300');
-  const wrap = el('div', { class: 'grid' });
-
-  const tabs = el('div', { class: 'tabs' },
-    [['same_album', 'Same album'], ['identical', 'Identical files'], ['cross_album', 'Across albums']]
-      .map(([key, label]) => el('button', {
-        class: dupeTab === key ? 'is-on' : '',
-        onclick: () => { dupeTab = key; render(); },
-      }, label)));
+  const groups = await api('/dupes?kind=' + dupeKind + '&limit=300');
 
   const explain = {
-    same_album: 'The same song appearing more than once inside one album. These are the real duplicates — Harmon keeps the best copy and stages the rest for removal.',
-    identical: 'Byte-for-byte identical files, wherever they sit in the library. Safe to collapse down to one.',
-    cross_album: 'The same song on two different albums — a studio release and a compilation, say. This is normal and Harmon will not touch it. Shown here so you can see it was checked.',
-  }[dupeTab];
+    same_album: 'The same song more than once inside one album. These are the real duplicates — Harmon keeps the best copy and stages the rest for removal.',
+    identical: 'Byte-for-byte identical files, wherever they sit. Safe to collapse to one.',
+    cross_album: 'The same song on two different albums — a studio release and a compilation, say. Normal, and Harmon will not touch it. Shown so you can see it was checked.',
+  }[dupeKind];
 
-  const bar = el('div', { class: 'bar-actions' }, tabs);
-  if (dupeTab !== 'cross_album' && groups.length) {
-    bar.append(el('div', { class: 'spacer' }));
+  const bar = el('div', { class: 'bar' },
+    el('div', { class: 'segs' },
+      [['same_album', 'Same album'], ['identical', 'Identical files'],
+       ['cross_album', 'Across albums']].map(([key, label]) =>
+        el('button', {
+          class: 'sm' + (dupeKind === key ? ' on' : ''),
+          onclick: () => { dupeKind = key; render(); },
+        }, label))));
+
+  if (dupeKind !== 'cross_album' && groups.length) {
+    bar.append(el('div', { class: 'push' }));
     bar.append(el('button', {
-      class: 'btn btn-danger', onclick: async () => {
+      class: 'warn sm', onclick: async () => {
         const r = await api('/dupes/stage-all', { method: 'POST' });
         toast(`${r.staged} removals staged. Approve them in Review.`);
-        render();
+        render(); poll();
       },
     }, 'Stage every removal'));
   }
 
-  const card = el('div', { class: 'card' },
-    el('h2', {}, VIEWS.duplicates.title),
-    el('p', {}, explain),
-    bar);
+  const body = groups.length
+    ? el('div', { class: 'rows' }, groups.map(dupeGroup))
+    : el('div', { class: 'empty' },
+        el('b', {}, 'Nothing here'),
+        dupeKind === 'cross_album'
+          ? 'No songs appear on more than one album.'
+          : 'No duplicates of this kind. Run a scan if you have added music recently.');
 
-  if (!groups.length) {
-    card.append(el('div', { class: 'empty' },
-      el('b', {}, 'Nothing here'),
-      dupeTab === 'cross_album'
-        ? 'No songs appear on more than one album.'
-        : 'Harmon found no duplicates of this kind. Run a scan if you have added music recently.'));
-  } else {
-    const list = el('div', { class: 'rows' });
-    groups.forEach((g) => list.append(dupeGroup(g)));
-    card.append(list);
-  }
-
-  wrap.append(card);
-  return wrap;
+  return card('Duplicates', explain, bar, body);
 }
 
 function dupeGroup(g) {
-  const body = el('div', { class: 'group-body', style: 'display:none' });
+  const body = el('div', { class: 'gbody', style: 'display:none' });
   let loaded = false;
 
   const head = el('div', {
-    class: 'group-head',
+    class: 'ghead',
     onclick: async () => {
       const open = body.style.display !== 'none';
       body.style.display = open ? 'none' : 'flex';
@@ -300,13 +318,11 @@ function dupeGroup(g) {
     },
   },
     el('div', {},
-      el('div', { class: 'row-title' }, g.title || 'Untitled'),
-      el('div', { class: 'row-sub' }, g.artist || 'Unknown artist')),
-    el('span', { class: 'pill' }, `${g.copies} copies`),
-    el('span', { class: g.kind === 'cross_album' ? 'pill pill-cool' : 'pill pill-hot' },
-      g.kind === 'cross_album' ? 'Left alone' : `${bytes(g.reclaimable)} to reclaim`),
-    el('span', { class: 'pill' }, 'Show copies'),
-  );
+      el('div', { class: 'rname' }, g.title || 'Untitled'),
+      el('div', { class: 'rmeta' }, g.artist || 'Unknown artist')),
+    chip(`${g.copies} copies`),
+    g.kind === 'cross_album' ? chip('Left alone') : chip(`${bytes(g.reclaimable)} to reclaim`, 'hot'),
+    chip('Show copies'));
 
   return el('div', { class: 'group' }, head, body);
 }
@@ -317,132 +333,110 @@ async function fillGroup(groupId, body) {
   const readOnly = detail.kind === 'cross_album';
 
   detail.members.forEach((m) => {
-    const mark = el('input', {
-      type: 'radio', name: 'keep-' + groupId, checked: !!m.keeper, disabled: readOnly,
-      onchange: async () => {
-        await api(`/dupes/${groupId}/keeper/${m.id}`, { method: 'POST' });
-        await fillGroup(groupId, body);
-      },
-    });
-    body.append(el('div', { class: 'copy' + (m.keeper ? ' is-keeper' : '') },
-      readOnly ? el('span', {}) : mark,
+    body.append(el('div', { class: 'copy' + (m.keeper ? ' keeper' : '') },
+      readOnly ? el('span', {}) : el('input', {
+        type: 'radio', name: 'keep-' + groupId, checked: !!m.keeper,
+        onchange: async () => {
+          await api(`/dupes/${groupId}/keeper/${m.id}`, { method: 'POST' });
+          await fillGroup(groupId, body);
+        },
+      }),
       el('div', {},
-        el('div', { class: 'row-title' },
+        el('div', { class: 'rname' },
           `${(m.codec || '?').toUpperCase()} · ${m.bitrate || '?'} kbps · ${bytes(m.size)}`),
-        el('div', { class: 'copy-path' }, m.path),
-        el('div', { class: 'row-sub' }, m.album || 'No album tag')),
-      el('span', { class: m.keeper ? 'pill pill-good' : 'pill' }, m.reason)));
+        el('div', { class: 'rpath' }, m.path),
+        el('div', { class: 'rmeta' }, m.album || 'No album tag')),
+      chip(m.reason, m.keeper ? 'good' : null)));
   });
 
   if (!readOnly) {
-    body.append(el('div', { class: 'bar-actions', style: 'margin:10px 0 0' },
+    body.append(el('div', { class: 'bar', style: 'margin:10px 0 0' },
       el('button', {
-        class: 'btn btn-sm btn-danger', onclick: async () => {
+        class: 'warn sm', onclick: async () => {
           const r = await api(`/dupes/${groupId}/stage`, { method: 'POST' });
-          toast(`${r.staged} removals staged. They will not happen until approved.`);
+          toast(`${r.staged} removals staged. Nothing happens until approved.`);
           poll();
         },
       }, 'Stage the other copies for removal'),
-      el('span', { class: 'row-sub' },
-        'Removed files move to your originals folder, not the bin.')));
+      el('span', { class: 'rmeta' }, 'Removed files move to your originals folder, not the bin.')));
   }
 }
 
 /* --- metadata ---------------------------------------------------------- */
 
-let metaOnlyProblems = true;
+let onlyProblems = true;
 
 async function viewMetadata() {
-  const tracks = await api(`/tracks?limit=150&problems=${metaOnlyProblems}`);
-  const staged = await api('/changes?status=pending&kind=tag&limit=1');
+  const [tracks, staged] = await Promise.all([
+    api(`/tracks?limit=150&problems=${onlyProblems}`),
+    api('/changes?status=pending&kind=tag&limit=1'),
+  ]);
 
-  const card = el('div', { class: 'card' },
-    el('h2', {}, 'Tag and artwork cleanup'),
-    el('p', {}, 'Harmon asks MusicBrainz, Discogs, Last.fm and Spotify in the order you set, takes the first answer for each field, and stages what it would change. Your files stay untouched until you approve.'),
-    el('div', { class: 'bar-actions' },
-      el('label', { class: 'checkall' },
-        el('input', {
-          type: 'checkbox', checked: metaOnlyProblems,
-          onchange: (e) => { metaOnlyProblems = e.target.checked; render(); },
-        }),
-        'Only show tracks with something missing'),
-      el('div', { class: 'spacer' }),
-      staged.counts.by_kind?.tag
-        ? el('span', { class: 'pill pill-cool' },
-            `${staged.counts.by_kind.tag} suggestions waiting in Review`)
-        : null,
-      el('button', {
-        class: 'btn btn-primary',
-        onclick: async () => {
-          await api('/run/enrich', { method: 'POST', body: {} });
-          toast('Looking things up. MusicBrainz limits Harmon to one track a second.');
-          poll();
-        },
-      }, 'Look up everything not yet checked')));
+  const bar = el('div', { class: 'bar' },
+    el('label', { class: 'rmeta', style: 'display:flex;gap:8px;align-items:center;cursor:pointer' },
+      el('input', {
+        type: 'checkbox', checked: onlyProblems,
+        onchange: (e) => { onlyProblems = e.target.checked; render(); },
+      }),
+      'Only tracks with something missing'),
+    el('div', { class: 'push' }),
+    staged.counts.by_kind?.tag ? chip(`${staged.counts.by_kind.tag} waiting in review`, 'wait') : null,
+    el('button', {
+      class: 'go', onclick: async () => {
+        await api('/run/enrich', { method: 'POST', body: {} });
+        toast('Looking things up. MusicBrainz limits Harmon to one track a second.');
+        poll();
+      },
+    }, 'Look up everything not yet checked'));
 
-  if (!tracks.length) {
-    card.append(el('div', { class: 'empty' },
-      el('b', {}, 'Every track has what it needs'),
-      'Artist, album, genre and artwork are all filled in.'));
-    return card;
-  }
+  const body = tracks.length
+    ? el('div', { class: 'rows' }, tracks.map((t) => {
+        const gaps = [];
+        if (!t.artist) gaps.push('artist');
+        if (!t.album) gaps.push('album');
+        if (!t.genre) gaps.push('genre');
+        if (!t.has_art) gaps.push('artwork');
+        return el('div', { class: 'row', style: 'grid-template-columns:1fr auto auto' },
+          el('div', {},
+            el('div', { class: 'rname' }, t.title || basename(t.path)),
+            el('div', { class: 'rmeta' },
+              [t.album_artist || t.artist || 'Unknown artist', t.album || 'No album'].join(' — '))),
+          gaps.length ? chip('Missing ' + gaps.join(', '), 'hot') : chip('Complete', 'good'),
+          el('button', {
+            class: 'sm', onclick: async (e) => {
+              e.target.disabled = true;
+              e.target.textContent = 'Looking up…';
+              await api('/run/enrich', { method: 'POST', body: { track_ids: [t.id] } });
+              setTimeout(() => { toast('Suggestions staged for this track.'); poll(); }, 1500);
+            },
+          }, 'Look this one up'));
+      }))
+    : el('div', { class: 'empty' },
+        el('b', {}, 'Every track has what it needs'),
+        'Artist, album, genre and artwork are all filled in.');
 
-  const list = el('div', { class: 'rows' });
-  tracks.forEach((t) => {
-    const gaps = [];
-    if (!t.artist) gaps.push('artist');
-    if (!t.album) gaps.push('album');
-    if (!t.genre) gaps.push('genre');
-    if (!t.has_art) gaps.push('artwork');
-
-    list.append(el('div', { class: 'row', style: 'grid-template-columns:1fr auto auto' },
-      el('div', {},
-        el('div', { class: 'row-title' }, t.title || basename(t.path)),
-        el('div', { class: 'row-sub' },
-          [t.album_artist || t.artist || 'Unknown artist', t.album || 'No album'].join(' — '))),
-      gaps.length
-        ? el('span', { class: 'pill pill-hot' }, 'Missing ' + gaps.join(', '))
-        : el('span', { class: 'pill pill-good' }, 'Complete'),
-      el('button', {
-        class: 'btn btn-sm',
-        onclick: async (e) => {
-          e.target.disabled = true;
-          e.target.textContent = 'Looking up…';
-          const r = await api('/run/enrich', { method: 'POST', body: { track_ids: [t.id] } });
-          setTimeout(() => { toast('Suggestions staged for this track.'); poll(); }, 1500);
-        },
-      }, 'Look this one up')));
-  });
-
-  card.append(list);
-  return card;
+  return card('Tag and artwork cleanup',
+    'Harmon asks MusicBrainz, Discogs, Last.fm and Spotify in the order you set, takes the first answer for each field, and stages what it would change. Files stay untouched until you approve.',
+    bar, body);
 }
 
-/* --- standardize ------------------------------------------------------- */
+/* --- format ------------------------------------------------------------ */
 
-async function viewStandardize() {
+async function viewFormat() {
   const [cfg, codecs, summary] = await Promise.all([
     api('/config'), api('/codecs'), api('/standardize'),
   ]);
   state.config = cfg;
-  state.codecs = codecs;
-
-  const wrap = el('div', { class: 'grid' });
   const target = cfg.target;
   const spec = codecs[target.codec];
+  const frag = document.createDocumentFragment();
 
   const save = async (patch) => {
     state.config = await api('/config', { method: 'PUT', body: { target: patch } });
     render();
   };
 
-  const picker = el('div', { class: 'codecs' },
-    Object.entries(codecs).map(([key, c]) => el('button', {
-      class: 'codec' + (key === target.codec ? ' is-on' : ''),
-      onclick: () => save({ codec: key, bitrate: c.bitrates.at(-2) || target.bitrate }),
-    }, el('b', {}, c.label), el('small', {}, c.blurb))));
-
-  const controls = el('div', { class: 'grid grid-2', style: 'margin-top:20px' });
+  const controls = el('div', { class: 'grid2', style: 'margin-top:18px' });
 
   if (spec.bitrates.length) {
     controls.append(el('div', { class: 'field' },
@@ -469,20 +463,24 @@ async function viewStandardize() {
           value: v, selected: v === target.samplerate ? 'selected' : null,
         }, label)))));
 
-  const rules = el('div', {},
-    switchRow('Convert lossless files too', 'Off by default, so your FLAC and ALAC rips are never turned into a lossy format by accident.',
+  frag.append(card('The format you want everything in',
+    'New music is checked against this automatically, converted, and swapped in — the same way Forge handles video.',
+    el('div', { class: 'codecs' },
+      Object.entries(codecs).map(([key, c]) => el('button', {
+        class: 'codec' + (key === target.codec ? ' on' : ''),
+        onclick: () => save({ codec: key, bitrate: c.bitrates.at(-2) || target.bitrate }),
+      }, el('b', {}, c.label), el('small', {}, c.blurb)))),
+    controls,
+    swRow('Convert lossless files too',
+      'Off by default, so your FLAC and ALAC rips are never turned lossy by accident.',
       target.convert_lossless, (v) => save({ convert_lossless: v })),
-    switchRow('Leave files that are already below the target bitrate', 'Re-encoding a 128 kbps file at 256 kbps cannot add back what is missing — it only makes the file bigger.',
+    swRow('Leave files already below the target bitrate',
+      'Re-encoding a 128 kbps file at 256 cannot add back what is missing — it only makes the file bigger.',
       target.skip_if_lower_bitrate, (v) => save({ skip_if_lower_bitrate: v })),
-    switchRow('Keep the original file after converting', 'Sources are moved to your originals folder instead of being deleted, so a bad conversion is one file move away from being undone.',
+    swRow('Keep the original after converting',
+      'Sources move to your originals folder instead of being deleted, so a bad conversion is one file move from being undone.',
       target.keep_originals, (v) => save({ keep_originals: v })),
-  );
-
-  wrap.append(el('div', { class: 'card' },
-    el('h2', {}, 'The format you want everything in'),
-    el('p', {}, 'New music added to your library is checked against this automatically, converted, and swapped in — the same way Forge handles video.'),
-    picker, controls, rules,
-    el('div', { class: 'field', style: 'margin-top:8px' },
+    el('div', { class: 'field', style: 'margin-top:14px' },
       el('label', {}, 'Originals folder'),
       el('input', {
         type: 'text', value: target.originals_path,
@@ -490,22 +488,16 @@ async function viewStandardize() {
       }),
       el('small', {}, 'Replaced sources and removed duplicates both land here.'))));
 
-  wrap.append(el('div', { class: 'grid grid-3' },
-    el('div', { class: 'tile is-good' },
-      el('strong', {}, num(summary.matching)), el('span', {}, `already ${spec.label}`)),
-    el('div', { class: 'tile ' + (summary.needs_convert ? 'is-hot' : '') },
-      el('strong', {}, num(summary.needs_convert)), el('span', {}, 'need converting')),
-    el('div', { class: 'tile' },
-      el('strong', {}, num(summary.protected)), el('span', {}, 'protected by your rules'),
-      el('small', {}, 'Lossless files, or already below target')),
-  ));
+  frag.append(el('div', { class: 'stats' },
+    stat(`Already ${spec.label}`, num(summary.matching), null, 'good'),
+    stat('Need converting', num(summary.needs_convert), null, summary.needs_convert ? 'hot' : null),
+    stat('Protected', num(summary.protected), 'Lossless, or already below target')));
 
-  wrap.append(el('div', { class: 'card' },
-    el('h2', {}, 'Queue the conversions'),
-    el('p', {}, `Harmon will stage ${num(summary.needs_convert)} files. Conversions run one at a time, are checked against the source length before the swap, and never start until you approve them in Review.`),
-    el('div', { class: 'bar-actions' },
+  frag.append(card('Queue the conversions',
+    `Harmon will stage ${num(summary.needs_convert)} files. Conversions run one at a time, are checked against the source length before the swap, and never start until you approve them in Review.`,
+    el('div', { class: 'bar' },
       el('button', {
-        class: 'btn btn-primary', disabled: !summary.needs_convert,
+        class: 'go', disabled: !summary.needs_convert,
         onclick: async () => {
           const r = await api('/standardize/stage', { method: 'POST', body: {} });
           toast(`${r.staged} conversions staged.`);
@@ -513,20 +505,14 @@ async function viewStandardize() {
         },
       }, 'Stage conversions'),
       el('button', {
-        class: 'btn', onclick: async () => {
+        onclick: async () => {
           await api('/run/convert', { method: 'POST', body: {} });
           toast('Running approved conversions.');
           poll();
         },
       }, 'Run approved conversions now'))));
 
-  return wrap;
-}
-
-function switchRow(title, blurb, checked, onchange) {
-  return el('label', { class: 'switch' },
-    el('input', { type: 'checkbox', checked: !!checked, onchange: (e) => onchange(e.target.checked) }),
-    el('span', {}, el('b', {}, title), el('small', {}, blurb)));
+  return frag;
 }
 
 /* --- review ------------------------------------------------------------ */
@@ -535,72 +521,54 @@ let reviewKind = null;
 const selected = new Set();
 
 async function viewReview() {
-  const data = await api('/changes?status=pending&limit=400' + (reviewKind ? '&kind=' + reviewKind : ''));
-  const counts = data.counts;
-  const items = data.items;
+  const data = await api('/changes?status=pending&limit=400' +
+    (reviewKind ? '&kind=' + reviewKind : ''));
+  const { counts, items } = data;
   selected.clear();
 
-  const wrap = el('div', { class: 'grid' });
+  const bar = el('div', { class: 'bar' },
+    el('div', { class: 'segs' },
+      [[null, 'Everything'], ['tag', 'Tags'], ['art', 'Artwork'],
+       ['delete', 'Removals'], ['convert', 'Conversions']].map(([key, label]) =>
+        el('button', {
+          class: 'sm' + (reviewKind === key ? ' on' : ''),
+          onclick: () => { reviewKind = key; render(); },
+        }, label + (counts.by_kind?.[key] ? ` (${counts.by_kind[key]})` : '')))),
+    el('div', { class: 'push' }),
+    el('button', { class: 'sm', disabled: !items.length, onclick: () => decideSelected('approved') },
+      'Approve ticked'),
+    el('button', {
+      class: 'sm', disabled: !items.length, onclick: async () => {
+        await api('/changes/decide-all', { method: 'POST', body: { kind: reviewKind, status: 'approved' } });
+        toast('Approved. Apply them when you are ready.'); render(); poll();
+      },
+    }, 'Approve all shown'),
+    el('button', {
+      class: 'sm', disabled: !items.length, onclick: async () => {
+        await api('/changes/decide-all', { method: 'POST', body: { kind: reviewKind, status: 'rejected' } });
+        toast('Rejected.'); render(); poll();
+      },
+    }, 'Reject all shown'),
+    el('button', {
+      class: 'go', disabled: !counts.approved, onclick: async () => {
+        await api('/run/apply', { method: 'POST', body: {} });
+        toast('Writing approved changes to your files.'); poll();
+      },
+    }, `Apply ${num(counts.approved || 0)} approved`));
 
-  const tabs = el('div', { class: 'tabs' },
-    [[null, 'Everything'], ['tag', 'Tags'], ['art', 'Artwork'],
-     ['delete', 'Removals'], ['convert', 'Conversions']]
-      .map(([key, label]) => el('button', {
-        class: reviewKind === key ? 'is-on' : '',
-        onclick: () => { reviewKind = key; render(); },
-      }, label + (counts.by_kind?.[key] ? ` (${counts.by_kind[key]})` : ''))));
+  const status = el('div', { class: 'bar' },
+    counts.approved ? chip(`${num(counts.approved)} approved and ready to write`, 'good') : null,
+    counts.failed ? chip(`${num(counts.failed)} failed`, 'hot') : null);
 
-  const card = el('div', { class: 'card' },
-    el('h2', {}, `${num(counts.pending)} changes staged`),
-    el('p', {}, 'This is the only screen that writes to your library. Approve what you want, then apply — everything else stays as it is.'),
-    el('div', { class: 'bar-actions' }, tabs,
-      el('div', { class: 'spacer' }),
-      el('button', {
-        class: 'btn btn-sm', disabled: !items.length,
-        onclick: () => decideSelected('approved'),
-      }, 'Approve ticked'),
-      el('button', {
-        class: 'btn btn-sm', disabled: !items.length,
-        onclick: async () => {
-          await api('/changes/decide-all', { method: 'POST', body: { kind: reviewKind, status: 'approved' } });
-          toast('Approved. Apply them when you are ready.'); render(); poll();
-        },
-      }, 'Approve all shown'),
-      el('button', {
-        class: 'btn btn-sm', disabled: !items.length,
-        onclick: async () => {
-          await api('/changes/decide-all', { method: 'POST', body: { kind: reviewKind, status: 'rejected' } });
-          toast('Rejected.'); render(); poll();
-        },
-      }, 'Reject all shown'),
-      el('button', {
-        class: 'btn btn-primary btn-sm', disabled: !counts.approved,
-        onclick: async () => {
-          await api('/run/apply', { method: 'POST', body: {} });
-          toast('Writing approved changes to your files.'); poll();
-        },
-      }, `Apply ${num(counts.approved || 0)} approved changes`)));
+  const body = items.length
+    ? el('div', { class: 'rows' }, items.map(changeRow))
+    : el('div', { class: 'empty' },
+        el('b', {}, 'Nothing waiting'),
+        'Run a scan or a metadata lookup and anything Harmon wants to change appears here first.');
 
-  if (counts.approved) {
-    card.append(el('div', { class: 'bar-actions' },
-      el('span', { class: 'pill pill-good' },
-        `${num(counts.approved)} approved and ready to write`),
-      counts.failed ? el('span', { class: 'pill pill-hot' }, `${num(counts.failed)} failed`) : null));
-  }
-
-  if (!items.length) {
-    card.append(el('div', { class: 'empty' },
-      el('b', {}, 'Nothing waiting'),
-      'Run a scan or a metadata lookup and anything Harmon wants to change will appear here first.'));
-    wrap.append(card);
-    return wrap;
-  }
-
-  const list = el('div', { class: 'rows' });
-  items.forEach((c) => list.append(changeRow(c)));
-  card.append(list);
-  wrap.append(card);
-  return wrap;
+  return card(`${num(counts.pending)} changes staged`,
+    'This is the only panel that writes to your library. Approve what you want, then apply — everything else stays as it is.',
+    bar, status, body);
 }
 
 async function decideSelected(status) {
@@ -615,29 +583,27 @@ async function decideSelected(status) {
 }
 
 function changeRow(c) {
-  const label = {
-    tag: 'Tag', art: 'Artwork', delete: 'Remove file', convert: 'Convert',
-  }[c.kind] || c.kind;
-
+  const label = { tag: 'Tag', art: 'Artwork', delete: 'Remove file', convert: 'Convert' }[c.kind] || c.kind;
   let detail;
+
   if (c.kind === 'tag') {
     detail = el('div', { class: 'diff' },
-      el('span', { class: 'row-sub' }, c.field.replace('_', ' ')),
-      c.old_value ? el('s', {}, c.old_value) : el('span', { class: 'row-sub' }, '(empty)'),
+      el('span', { class: 'rmeta' }, c.field.replace('_', ' ')),
+      c.old_value ? el('s', {}, c.old_value) : el('span', { class: 'rmeta' }, '(empty)'),
       el('em', {}, c.new_value));
   } else if (c.kind === 'art') {
     let host = c.source || 'a cover source';
-    try { host = new URL(c.new_value).hostname; } catch { /* not a URL, keep the source name */ }
-    detail = el('div', { class: 'diff' }, el('em', {}, 'Embed a cover image'),
-      el('span', { class: 'row-sub' }, host));
+    try { host = new URL(c.new_value).hostname; } catch { /* not a URL */ }
+    detail = el('div', { class: 'diff' },
+      el('em', {}, 'Embed a cover image'), el('span', { class: 'rmeta' }, host));
   } else if (c.kind === 'delete') {
     detail = el('div', { class: 'diff' }, el('s', {}, c.old_value));
   } else {
-    detail = el('div', { class: 'diff' }, el('em', {}, c.new_value),
-      el('span', { class: 'row-sub' }, c.old_value));
+    detail = el('div', { class: 'diff' },
+      el('em', {}, c.new_value), el('span', { class: 'rmeta' }, c.old_value));
   }
 
-  const kindPill = { delete: 'pill pill-hot', convert: 'pill pill-cool' }[c.kind] || 'pill';
+  const tone = { delete: 'hot', convert: 'wait' }[c.kind] || null;
 
   return el('div', { class: 'row', style: 'grid-template-columns:auto 1fr auto auto auto' },
     el('input', {
@@ -645,21 +611,21 @@ function changeRow(c) {
       onchange: (e) => e.target.checked ? selected.add(c.id) : selected.delete(c.id),
     }),
     el('div', {},
-      el('div', { class: 'row-title' }, c.title || basename(c.path)),
-      el('div', { class: 'row-sub' }, [c.artist, c.album].filter(Boolean).join(' — ') || c.path),
+      el('div', { class: 'rname' }, c.title || basename(c.path)),
+      el('div', { class: 'rmeta' }, [c.artist, c.album].filter(Boolean).join(' — ') || c.path),
       detail),
-    el('span', { class: kindPill }, label),
-    el('span', { class: 'pill mono', title: 'How sure the source is' },
+    chip(label, tone),
+    el('span', { class: 'chip mono', title: 'How sure the source is' },
       `${Math.round((c.confidence || 0) * 100)}%`),
-    el('div', { class: 'row-actions' },
+    el('div', { class: 'racts' },
       el('button', {
-        class: 'btn btn-sm btn-primary', onclick: async () => {
+        class: 'go sm', onclick: async () => {
           await api('/changes/decide', { method: 'POST', body: { ids: [c.id], status: 'approved' } });
           render(); poll();
         },
       }, 'Approve'),
       el('button', {
-        class: 'btn btn-sm', onclick: async () => {
+        class: 'sm', onclick: async () => {
           await api('/changes/decide', { method: 'POST', body: { ids: [c.id], status: 'rejected' } });
           render(); poll();
         },
@@ -671,81 +637,77 @@ function changeRow(c) {
 async function viewSettings() {
   const [cfg, status] = await Promise.all([api('/config'), api('/status')]);
   state.config = cfg;
+  const frag = document.createDocumentFragment();
 
-  const save = async (patch, rerender = false) => {
+  const save = async (patch, again = false) => {
     state.config = await api('/config', { method: 'PUT', body: patch });
-    if (rerender) render();
+    if (again) render();
   };
 
-  const wrap = el('div', { class: 'grid' });
-
-  /* Network diagnostics */
-  const netResult = el('div', { class: 'rows' });
-  wrap.append(el('div', { class: 'card' },
-    el('h2', {}, 'Check the connection'),
-    el('p', {}, 'If lookups fail with a name resolution error, run this. It tests one layer at a time, so the first thing that fails is the thing to fix.'),
-    el('div', { class: 'bar-actions' },
+  /* Connection check */
+  const netOut = el('div', { class: 'rows' });
+  frag.append(card('Check the connection',
+    'If lookups fail with a name resolution error, run this. It tests one layer at a time, so the first thing that fails is the thing to fix.',
+    el('div', { class: 'bar' },
       el('button', {
-        class: 'btn', onclick: async (e) => {
+        onclick: async (e) => {
           e.target.disabled = true;
-          netResult.innerHTML = '';
-          netResult.append(el('div', { class: 'empty' }, 'Testing…'));
+          netOut.innerHTML = '';
+          netOut.append(el('div', { class: 'empty' }, 'Testing…'));
           const r = await api('/netcheck');
-          netResult.innerHTML = '';
-          r.checks.forEach((c) => netResult.append(
+          netOut.innerHTML = '';
+          r.checks.forEach((c) => netOut.append(
             el('div', { class: 'row', style: 'grid-template-columns:1fr auto' },
               el('div', {},
-                el('div', { class: 'row-title' }, c.name),
-                el('div', { class: 'row-sub', style: 'white-space:normal' }, c.detail)),
-              el('span', { class: c.ok ? 'pill pill-good' : 'pill pill-hot' },
-                c.ok ? 'Fine' : 'Problem'))));
-          netResult.append(el('div', { class: 'row' },
-            el('div', { class: 'row-sub', style: 'white-space:normal' }, r.verdict)));
+                el('div', { class: 'rname' }, c.name),
+                el('div', { class: 'rmeta', style: 'white-space:normal' }, c.detail)),
+              chip(c.ok ? 'Fine' : 'Problem', c.ok ? 'good' : 'hot'))));
+          netOut.append(el('div', { class: 'row' },
+            el('div', { class: 'rmeta', style: 'white-space:normal' }, r.verdict)));
           e.target.disabled = false;
         },
       }, 'Run the check')),
-    netResult));
+    netOut));
 
-  /* Shell */
-  wrap.append(el('div', { class: 'card' },
-    el('h2', {}, 'Switching to Forge'),
-    el('p', {}, 'The address of your Forge instance. Once this is set, the Forge button at the top of the rail switches over to it.'),
-    el('div', { class: 'field' },
-      el('label', {}, 'Forge address'),
-      el('input', {
-        type: 'text', value: cfg.shell?.forge_url || '',
-        placeholder: 'https://forge.yourdomain.tld',
-        onchange: (e) => save({ shell: { forge_url: e.target.value.trim() } }, true),
-      }),
-      el('small', {}, 'Include https:// and no trailing slash. Leave it empty to grey the button out.'))));
+  /* Appearance */
+  frag.append(card('Appearance', 'Four palettes, one shape. Nothing about the layout changes.',
+    el('div', { class: 'grid2' },
+      THEMES.map(([key, label, swatch, blurb]) => el('button', {
+        class: 'codec' + ((cfg.shell?.theme || 'nightfall') === key ? ' on' : ''),
+        onclick: async () => {
+          applyTheme(key);
+          await save({ shell: { theme: key } }, true);
+        },
+      },
+        el('b', {}, el('span', {
+          style: `display:inline-block;width:11px;height:11px;border-radius:50%;background:${swatch};margin-right:8px`,
+        }), label),
+        el('small', {}, blurb))))));
 
   /* Libraries */
-  const libList = el('div', { class: 'rows' },
-    status.libraries.length
-      ? status.libraries.map((l) => el('div', { class: 'row', style: 'grid-template-columns:1fr auto' },
-          el('div', {},
-            el('div', { class: 'row-title' }, l.name),
-            el('div', { class: 'row-sub' }, l.path)),
-          el('button', {
-            class: 'btn btn-sm', onclick: async () => {
-              await api('/libraries/' + l.id, { method: 'DELETE' });
-              render();
-            },
-          }, 'Remove')))
-      : el('div', { class: 'empty' }, 'No folders yet.'));
-
   const pathInput = el('input', { type: 'text', placeholder: '/music' });
   const nameInput = el('input', { type: 'text', placeholder: 'Music' });
 
-  wrap.append(el('div', { class: 'card' },
-    el('h2', {}, 'Music folders'),
-    el('p', {}, 'The paths as Harmon sees them inside its container, not as they look on your NAS. If you mounted your library at /music in the compose file, that is what goes here.'),
-    libList,
-    el('div', { class: 'grid grid-2', style: 'margin-top:16px' },
+  frag.append(card('Music folders',
+    'The paths as Harmon sees them inside its container, not as they look on your NAS. If you mounted your library at /music, that is what goes here.',
+    el('div', { class: 'rows' },
+      status.libraries.length
+        ? status.libraries.map((l) => el('div', { class: 'row', style: 'grid-template-columns:1fr auto' },
+            el('div', {},
+              el('div', { class: 'rname' }, l.name),
+              el('div', { class: 'rpath' }, l.path)),
+            el('button', {
+              class: 'sm', onclick: async () => {
+                await api('/libraries/' + l.id, { method: 'DELETE' });
+                render();
+              },
+            }, 'Remove')))
+        : el('div', { class: 'empty' }, 'No folders yet.')),
+    el('div', { class: 'grid2', style: 'margin-top:16px' },
       el('div', { class: 'field' }, el('label', {}, 'Folder path'), pathInput),
       el('div', { class: 'field' }, el('label', {}, 'What to call it'), nameInput)),
     el('button', {
-      class: 'btn btn-primary', onclick: async () => {
+      class: 'go', onclick: async () => {
         try {
           await api('/libraries', { method: 'POST', body: { path: pathInput.value, name: nameInput.value } });
           toast('Folder added. Run a scan to read it.');
@@ -756,53 +718,57 @@ async function viewSettings() {
 
   /* Providers */
   const order = [...cfg.providers.order];
-  const orderList = el('div', { class: 'rows' },
-    order.map((name, i) => el('div', { class: 'row', style: 'grid-template-columns:auto 1fr auto' },
-      el('span', { class: 'pill mono' }, i + 1),
+  const NAMES = { musicbrainz: 'MusicBrainz', discogs: 'Discogs', lastfm: 'Last.fm', spotify: 'Spotify' };
+  const BLURB = {
+    musicbrainz: 'Free and needs no key. Best for correct artist, album and track numbers.',
+    discogs: 'Needs a token. Best for release years, styles and pressing detail.',
+    lastfm: 'Needs a key. Best for genres people actually use.',
+    spotify: 'Needs a client ID and secret. Best for high-resolution artwork.',
+  };
+  const hasKey = {
+    musicbrainz: true,
+    discogs: Boolean(cfg.providers.discogs_token),
+    lastfm: Boolean(cfg.providers.lastfm_key),
+    spotify: Boolean(cfg.providers.spotify_client_id && cfg.providers.spotify_client_secret),
+  };
+
+  const orderRows = el('div', { class: 'rows' }, order.map((name, i) => {
+    const probe = el('span', { class: 'chip' },
+      name === 'musicbrainz' ? 'No key needed'
+        : hasKey[name] ? 'Key saved — untested' : 'No key yet, this one gets skipped');
+    return el('div', { class: 'row', style: 'grid-template-columns:auto 1fr auto' },
+      el('span', { class: 'chip mono' }, i + 1),
       el('div', {},
-        el('div', { class: 'row-title' }, {
-          musicbrainz: 'MusicBrainz', discogs: 'Discogs', lastfm: 'Last.fm', spotify: 'Spotify',
-        }[name]),
-        el('div', { class: 'row-sub' }, {
-          musicbrainz: 'Free and needs no key. Best for correct artist, album and track numbers.',
-          discogs: 'Needs a token. Best for release years, styles and pressing detail.',
-          lastfm: 'Needs a key. Best for genres people actually use.',
-          spotify: 'Needs a client ID and secret. Best for high-resolution artwork.',
-        }[name]),
-        el('div', { style: 'margin-top:7px' },
-          el('span', { class: 'probe pill' },
-            name === 'musicbrainz' ? 'No key needed'
-              : (name === 'spotify'
-                  ? (cfg.providers.spotify_client_id && cfg.providers.spotify_client_secret)
-                  : cfg.providers[name === 'discogs' ? 'discogs_token' : 'lastfm_key'])
-                ? 'Key saved — untested' : 'No key yet, this one gets skipped'))),
-      el('div', { class: 'row-actions' },
+        el('div', { class: 'rname' }, NAMES[name]),
+        el('div', { class: 'rmeta', style: 'white-space:normal' }, BLURB[name]),
+        el('div', { style: 'margin-top:7px' }, probe)),
+      el('div', { class: 'racts' },
         el('button', {
-          class: 'btn btn-sm',
-          onclick: async (e) => {
-            const btn = e.target;
-            const cell = btn.closest('.row').querySelector('.probe');
-            btn.disabled = true; cell.textContent = 'Checking…'; cell.className = 'probe pill';
+          class: 'sm', onclick: async (e) => {
+            e.target.disabled = true;
+            probe.textContent = 'Checking…';
+            probe.className = 'chip';
             const r = await api(`/providers/${name}/test`, { method: 'POST', body: {} });
-            cell.textContent = r.message;
-            cell.className = 'probe pill ' + (r.ok ? 'pill-good' : 'pill-hot');
-            btn.disabled = false;
+            probe.textContent = r.message;
+            probe.className = 'chip ' + (r.ok ? 'good' : 'hot');
+            e.target.disabled = false;
           },
         }, 'Test'),
         el('button', {
-          class: 'btn btn-sm', disabled: i === 0, onclick: () => {
+          class: 'sm', disabled: i === 0, onclick: () => {
             const next = [...order];
             [next[i - 1], next[i]] = [next[i], next[i - 1]];
             save({ providers: { order: next } }, true);
           },
-        }, 'Move up'),
+        }, 'Up'),
         el('button', {
-          class: 'btn btn-sm', disabled: i === order.length - 1, onclick: () => {
+          class: 'sm', disabled: i === order.length - 1, onclick: () => {
             const next = [...order];
             [next[i], next[i + 1]] = [next[i + 1], next[i]];
             save({ providers: { order: next } }, true);
           },
-        }, 'Move down')))));
+        }, 'Down')));
+  }));
 
   const keyField = (label, key, blurb, where, type = 'password') =>
     el('div', { class: 'field' },
@@ -814,11 +780,10 @@ async function viewSettings() {
       el('small', {}, blurb, ' ',
         el('a', { href: where.url, target: '_blank', rel: 'noopener' }, where.label)));
 
-  wrap.append(el('div', { class: 'card' },
-    el('h2', {}, 'Where metadata comes from'),
-    el('p', {}, 'Harmon asks these in order and takes the first answer it gets for each field, so a source with no key simply gets skipped and the next one fills the gap.'),
-    orderList,
-    el('div', { class: 'grid grid-2', style: 'margin-top:18px' },
+  frag.append(card('Where metadata comes from',
+    'Harmon asks these in order and takes the first answer for each field, so a source with no key is skipped and the next one fills the gap.',
+    orderRows,
+    el('div', { class: 'grid2', style: 'margin-top:18px' },
       keyField('Contact email', 'contact_email',
         'MusicBrainz asks every tool to say who is using it, and throttles the ones that do not. Nothing is sent anywhere else.',
         { url: 'https://musicbrainz.org/doc/MusicBrainz_API/Rate_Limiting', label: 'Why they ask' }, 'text'),
@@ -836,17 +801,13 @@ async function viewSettings() {
         { url: 'https://developer.spotify.com/dashboard', label: 'Open the Spotify dashboard' }))));
 
   /* Enrichment */
-  const fieldToggles = el('div', {},
-    Object.entries(cfg.enrich.fields).map(([f, on]) => switchRow(
+  frag.append(card('What Harmon is allowed to correct',
+    'Turn off anything you would rather keep exactly as you tagged it.',
+    Object.entries(cfg.enrich.fields).map(([f, on]) => swRow(
       f.replace('_', ' ').replace(/^./, (c) => c.toUpperCase()),
       `Let Harmon correct the ${f.replace('_', ' ')} tag.`,
-      on, (v) => save({ enrich: { fields: { [f]: v } } }))));
-
-  wrap.append(el('div', { class: 'card' },
-    el('h2', {}, 'What Harmon is allowed to correct'),
-    el('p', {}, 'Turn off anything you would rather keep exactly as you tagged it.'),
-    fieldToggles,
-    el('div', { class: 'grid grid-2', style: 'margin-top:18px' },
+      on, (v) => save({ enrich: { fields: { [f]: v } } }))),
+    el('div', { class: 'grid2', style: 'margin-top:18px' },
       el('div', { class: 'field' },
         el('label', {}, 'Minimum confidence'),
         el('input', {
@@ -861,23 +822,24 @@ async function viewSettings() {
           onchange: (e) => save({ enrich: { art_min_px: Number(e.target.value) } }),
         }),
         el('small', {}, 'In pixels along the shorter edge.'))),
-    switchRow('Embed artwork when a track has none', 'Downloads a front cover and writes it into the file.',
+    swRow('Embed artwork when a track has none',
+      'Downloads a front cover and writes it into the file.',
       cfg.enrich.embed_art, (v) => save({ enrich: { embed_art: v } })),
-    switchRow('Replace tags that are already filled in', 'Off by default: Harmon only fills blanks unless it is very sure the existing value is wrong.',
+    swRow('Replace tags that are already filled in',
+      'Off by default: Harmon only fills blanks unless it is very sure the existing value is wrong.',
       cfg.enrich.overwrite_existing, (v) => save({ enrich: { overwrite_existing: v } }))));
 
   /* Duplicates */
-  wrap.append(el('div', { class: 'card' },
-    el('h2', {}, 'How duplicates are judged'),
-    el('p', {}, 'Two files count as the same song when the artist and title match after Harmon strips things like "Remastered" and "feat.", and their lengths are close enough.'),
-    el('div', { class: 'grid grid-2' },
+  frag.append(card('How duplicates are judged',
+    'Two files are the same song when artist and title match after Harmon strips things like "Remastered" and "feat.", and their lengths are close enough.',
+    el('div', { class: 'grid2' },
       el('div', { class: 'field' },
         el('label', {}, 'Length may differ by'),
         el('input', {
           type: 'number', min: '0', max: '30', step: '0.5', value: cfg.dupes.duration_tolerance,
           onchange: (e) => save({ dupes: { duration_tolerance: Number(e.target.value) } }),
         }),
-        el('small', {}, 'Seconds. Three is enough to cover different encoders and trimmed silence.')),
+        el('small', {}, 'Seconds. Three covers different encoders and trimmed silence.')),
       el('div', { class: 'field' },
         el('label', {}, 'Which copy to keep'),
         el('select', { onchange: (e) => save({ dupes: { keeper_rule: e.target.value } }) },
@@ -890,10 +852,10 @@ async function viewSettings() {
 
   /* Automation */
   const a = cfg.automation;
-  wrap.append(el('div', { class: 'card' },
-    el('h2', {}, 'How much Harmon does on its own'),
-    el('p', {}, 'Scanning, looking things up and staging are always safe — they change nothing on disk. The approval switches below are the ones that let Harmon write without asking, so turn them on only once you trust what it is suggesting.'),
-    switchRow('Watch the library for new music', 'Re-scans on a timer and runs new files through the whole check.',
+  frag.append(card('How much Harmon does on its own',
+    'Scanning, looking things up and staging are always safe — they change nothing on disk. The approval switches are the ones that let Harmon write without asking.',
+    swRow('Watch the library for new music',
+      'Re-scans on a timer and runs new files through the whole check.',
       a.auto_scan, (v) => save({ automation: { auto_scan: v } })),
     el('div', { class: 'field' },
       el('label', {}, 'Check every'),
@@ -902,21 +864,22 @@ async function viewSettings() {
         onchange: (e) => save({ automation: { scan_interval_min: Number(e.target.value) } }),
       }),
       el('small', {}, 'Minutes.')),
-    switchRow('Look up metadata for new tracks', 'Stages suggestions automatically after each scan.',
+    swRow('Look up metadata for new tracks', 'Stages suggestions automatically after each scan.',
       a.auto_enrich, (v) => save({ automation: { auto_enrich: v } })),
-    switchRow('Check new tracks against your target format', 'Stages conversions for anything that does not match.',
+    swRow('Check new tracks against your target format', 'Stages conversions for anything that does not match.',
       a.auto_standardize, (v) => save({ automation: { auto_standardize: v } })),
-    el('h2', { style: 'margin-top:22px' }, 'Approve without asking'),
-    switchRow('Tag and artwork changes', 'Only ones at or above your confidence setting.',
+    el('h2', {}, 'Approve without asking'),
+    swRow('Tag and artwork changes', 'Only ones at or above your confidence setting.',
       a.auto_approve_tags, (v) => save({ automation: { auto_approve_tags: v } })),
-    switchRow('Format conversions', 'Originals are still kept if that setting is on.',
+    swRow('Format conversions', 'Originals are still kept if that setting is on.',
       a.auto_approve_converts, (v) => save({ automation: { auto_approve_converts: v } })),
-    switchRow('Duplicate removals', 'The riskiest one. Files move to your originals folder rather than being deleted.',
+    swRow('Duplicate removals', 'The riskiest one. Files move to your originals folder rather than being deleted.',
       a.auto_approve_deletes, (v) => save({ automation: { auto_approve_deletes: v } })),
-    el('h2', { style: 'margin-top:22px' }, 'Quiet hours'),
-    switchRow('Only convert between set hours', 'Scanning and lookups still run any time; only the heavy conversion work waits.',
+    el('h2', {}, 'Quiet hours'),
+    swRow('Only convert between set hours',
+      'Scanning and lookups still run any time; only the heavy conversion work waits.',
       a.schedule_enabled, (v) => save({ automation: { schedule_enabled: v } })),
-    el('div', { class: 'grid grid-2' },
+    el('div', { class: 'grid2' },
       el('div', { class: 'field' }, el('label', {}, 'Start'),
         el('input', {
           type: 'time', value: a.schedule_start,
@@ -928,7 +891,19 @@ async function viewSettings() {
           onchange: (e) => save({ automation: { schedule_end: e.target.value } }),
         })))));
 
-  return wrap;
+  /* Forge link */
+  frag.append(card('Link to Forge',
+    'Harmon and Forge stay separate apps. Set an address here and a link to Forge appears in the header — nothing more clever than that.',
+    el('div', { class: 'field' },
+      el('label', {}, 'Forge address'),
+      el('input', {
+        type: 'text', value: cfg.shell?.forge_url || '',
+        placeholder: 'https://forge.yourdomain.tld',
+        onchange: (e) => save({ shell: { forge_url: e.target.value.trim() } }, true),
+      }),
+      el('small', {}, 'Include https:// and no trailing slash. Leave it empty for no link.'))));
+
+  return frag;
 }
 
 /* --- boot -------------------------------------------------------------- */
@@ -945,19 +920,33 @@ $('#btn-pipeline').addEventListener('click', async () => {
   poll();
 });
 
-$('.app[data-app="forge"]').addEventListener('click', () => {
-  const url = state.status?.shell?.forge_url;
-  if (url) { window.location.href = url; return; }
-  toast('Add your Forge address in Settings and this will switch over to it.');
-  location.hash = '#/settings';
-});
+$$('.toptab').forEach((b) => b.addEventListener('click', () => switchTab(b.dataset.tab)));
 
 window.addEventListener('unhandledrejection', (e) => {
   toast(e.reason?.message || 'That did not work.', true);
   e.preventDefault();
 });
 
-window.addEventListener('hashchange', route);
-route();
-poll();
-setInterval(poll, 2500);
+window.addEventListener('hashchange', () => {
+  const name = location.hash.replace('#/', '') || 'overview';
+  if (name !== state.tab) switchTab(name);
+});
+
+(async function boot() {
+  buildThemePicker();
+  try {
+    const cfg = await api('/config');
+    state.config = cfg;
+    applyTheme(cfg.shell?.theme || 'nightfall');
+    if (cfg.shell?.forge_url) {
+      $('#subtitle').after(el('a', {
+        href: cfg.shell.forge_url, class: 'tag',
+        style: 'text-decoration:none;color:var(--signal)',
+      }, 'Forge'));
+    }
+  } catch { applyTheme('nightfall'); }
+
+  await switchTab(location.hash.replace('#/', '') || 'overview', false);
+  poll();
+  setInterval(poll, 2500);
+})();

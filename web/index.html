@@ -3,75 +3,50 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="theme-color" content="#120E1C">
+<meta name="theme-color" content="#0C0A14">
 <title>Harmon</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;800&family=Chivo+Mono:wght@300;400;600&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/app.css">
 </head>
 <body>
 
-<div class="aurora" aria-hidden="true">
-  <span class="orb orb-a"></span>
-  <span class="orb orb-b"></span>
-  <span class="orb orb-c"></span>
-  <span class="grain"></span>
-</div>
+<div class="wrap">
 
-<div class="frame">
-
-  <!-- Shell rail: apps live here. Harmon is one; Forge slots in beside it. -->
-  <aside class="rail glass">
-    <div class="apps">
-      <button class="app is-active" data-app="harmon" aria-current="page">
-        <i class="orb orb-harmon" aria-hidden="true"></i>
-        <span>Harmon</span>
-      </button>
-      <span class="apps-divide" aria-hidden="true"></span>
-      <button class="app" data-app="forge" title="Forge — video transcoding">
-        <i class="orb orb-forge" aria-hidden="true"></i>
-        <span>Forge</span>
-      </button>
+  <header>
+    <h1><span class="rune">&#9834;</span>Harmon</h1>
+    <span class="tag" id="subtitle">music library</span>
+    <div class="themepick" id="themepick"></div>
+    <div class="pill">
+      <span class="dot" id="dot"></span>
+      <span id="worker-text">Idle</span>
     </div>
+  </header>
+  <div class="prog"><i id="worker-bar"></i></div>
 
-    <div class="rail-meta">
-      <span>Library</span>
-      <span id="rail-count">—</span>
-    </div>
+  <nav class="toptabs" id="toptabs">
+    <button class="toptab on" data-tab="overview">Overview</button>
+    <button class="toptab" data-tab="duplicates">Duplicates<b id="badge-dupes"></b></button>
+    <button class="toptab" data-tab="metadata">Metadata</button>
+    <button class="toptab" data-tab="format">Format<b id="badge-format"></b></button>
+    <button class="toptab" data-tab="review">Review<b id="badge-review"></b></button>
+    <button class="toptab" data-tab="settings">Settings</button>
+  </nav>
 
-    <nav class="nav" id="nav">
-      <a href="#/overview"    data-view="overview">Overview</a>
-      <a href="#/duplicates"  data-view="duplicates">Duplicates<b id="badge-dupes"></b></a>
-      <a href="#/metadata"    data-view="metadata">Metadata</a>
-      <a href="#/standardize" data-view="standardize">Format<b id="badge-format"></b></a>
-      <a href="#/review"      data-view="review">Review<b id="badge-review"></b></a>
-      <a href="#/settings"    data-view="settings">Settings</a>
-    </nav>
+  <div class="bar">
+    <button id="btn-scan">Scan library</button>
+    <button class="go" id="btn-pipeline">Run a full pass</button>
+  </div>
 
-    <div class="rail-foot">
-      <div class="worker" id="worker">
-        <span class="worker-dot"></span>
-        <span class="worker-text">Idle</span>
-      </div>
-      <div class="worker-bar"><i id="worker-bar"></i></div>
-    </div>
-  </aside>
+  <div class="tabpanel active" data-panel="overview"></div>
+  <div class="tabpanel" data-panel="duplicates"></div>
+  <div class="tabpanel" data-panel="metadata"></div>
+  <div class="tabpanel" data-panel="format"></div>
+  <div class="tabpanel" data-panel="review"></div>
+  <div class="tabpanel" data-panel="settings"></div>
 
-  <main class="stage">
-    <header class="topbar">
-      <div class="topbar-title">
-        <h1 id="view-title">Overview</h1>
-        <p id="view-sub">What Harmon has found in your library.</p>
-      </div>
-      <div class="topbar-actions">
-        <button class="btn btn-ghost" id="btn-scan">Scan library</button>
-        <button class="btn btn-primary" id="btn-pipeline">Run a full pass</button>
-      </div>
-    </header>
-
-    <div id="view" class="view"></div>
-  </main>
 </div>
 
 <div class="toasts" id="toasts" role="status" aria-live="polite"></div>
