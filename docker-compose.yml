@@ -1,7 +1,6 @@
 services:
   harmon:
     build: .
-    image: harmon:latest
     container_name: harmon
     restart: unless-stopped
 
