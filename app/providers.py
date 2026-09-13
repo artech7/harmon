@@ -331,6 +331,61 @@ def spotify(track: dict) -> dict | None:
     return result
 
 
+def check(name: str) -> dict:
+    """Try a real call against one provider so the UI can say whether a key works."""
+    cfg = get_config()["providers"]
+    try:
+        if name == "musicbrainz":
+            _get("https://musicbrainz.org/ws/2/recording",
+                 params={"query": "recording:Creep", "fmt": "json", "limit": 1})
+            return {"ok": True, "message": "Reachable. No key needed."}
+
+        if name == "discogs":
+            token = cfg["discogs_token"]
+            if not token:
+                return {"ok": False, "message": "No token set yet."}
+            _get("https://api.discogs.com/database/search",
+                 params={"q": "Pablo Honey", "per_page": 1, "token": token})
+            return {"ok": True, "message": "Token works."}
+
+        if name == "lastfm":
+            key = cfg["lastfm_key"]
+            if not key:
+                return {"ok": False, "message": "No key set yet."}
+            data = _get("https://ws.audioscrobbler.com/2.0/",
+                        params={"method": "track.getInfo", "api_key": key, "format": "json",
+                                "artist": "Radiohead", "track": "Creep"})
+            if data.get("error"):
+                return {"ok": False, "message": data.get("message") or "Last.fm rejected the key."}
+            return {"ok": True, "message": "Key works."}
+
+        if name == "spotify":
+            if not (cfg["spotify_client_id"] and cfg["spotify_client_secret"]):
+                return {"ok": False, "message": "Client ID and secret both needed."}
+            _spotify_token["expires"] = 0  # force a fresh sign-in rather than trusting a cache
+            return ({"ok": True, "message": "Client ID and secret work."} if _spotify_auth()
+                    else {"ok": False, "message": "Spotify refused the ID and secret."})
+
+        return {"ok": False, "message": f"No such source: {name}"}
+
+    except httpx.HTTPStatusError as exc:
+        code = exc.response.status_code
+        if code in (401, 403):
+            hint = {
+                "musicbrainz": "MusicBrainz turned the request away, which usually means "
+                               "rate limiting rather than anything you configured. "
+                               "Wait a minute and try again.",
+                "discogs": "Discogs rejected that token. Make sure it is a personal access "
+                           "token, not an application consumer key or secret.",
+                "lastfm": "Last.fm rejected that key.",
+                "spotify": "Spotify rejected those credentials.",
+            }.get(name, "That was rejected.")
+            return {"ok": False, "message": hint}
+        return {"ok": False, "message": f"The service answered with {code}."}
+    except Exception as exc:
+        return {"ok": False, "message": f"Could not reach it: {str(exc)[:120]}"}
+
+
 LOOKUPS = {
     "musicbrainz": musicbrainz,
     "discogs": discogs,

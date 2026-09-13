@@ -741,8 +741,27 @@ async function viewSettings() {
           discogs: 'Needs a token. Best for release years, styles and pressing detail.',
           lastfm: 'Needs a key. Best for genres people actually use.',
           spotify: 'Needs a client ID and secret. Best for high-resolution artwork.',
-        }[name])),
+        }[name]),
+        el('div', { style: 'margin-top:7px' },
+          el('span', { class: 'probe pill' },
+            name === 'musicbrainz' ? 'No key needed'
+              : (name === 'spotify'
+                  ? (cfg.providers.spotify_client_id && cfg.providers.spotify_client_secret)
+                  : cfg.providers[name === 'discogs' ? 'discogs_token' : 'lastfm_key'])
+                ? 'Key saved — untested' : 'No key yet, this one gets skipped'))),
       el('div', { class: 'row-actions' },
+        el('button', {
+          class: 'btn btn-sm',
+          onclick: async (e) => {
+            const btn = e.target;
+            const cell = btn.closest('.row').querySelector('.probe');
+            btn.disabled = true; cell.textContent = 'Checking…'; cell.className = 'probe pill';
+            const r = await api(`/providers/${name}/test`, { method: 'POST', body: {} });
+            cell.textContent = r.message;
+            cell.className = 'probe pill ' + (r.ok ? 'pill-good' : 'pill-hot');
+            btn.disabled = false;
+          },
+        }, 'Test'),
         el('button', {
           class: 'btn btn-sm', disabled: i === 0, onclick: () => {
             const next = [...order];
@@ -758,23 +777,33 @@ async function viewSettings() {
           },
         }, 'Move down')))));
 
-  const keyField = (label, key, blurb, type = 'password') => el('div', { class: 'field' },
-    el('label', {}, label),
-    el('input', {
-      type, value: cfg.providers[key] || '',
-      onchange: (e) => save({ providers: { [key]: e.target.value } }),
-    }),
-    el('small', {}, blurb));
+  const keyField = (label, key, blurb, where, type = 'password') =>
+    el('div', { class: 'field' },
+      el('label', {}, label),
+      el('input', {
+        type, value: cfg.providers[key] || '',
+        onchange: (e) => save({ providers: { [key]: e.target.value.trim() } }),
+      }),
+      el('small', {}, blurb, ' ',
+        el('a', { href: where.url, target: '_blank', rel: 'noopener' }, where.label)));
 
   wrap.append(el('div', { class: 'card' },
     el('h2', {}, 'Where metadata comes from'),
     el('p', {}, 'Harmon asks these in order and takes the first answer it gets for each field, so a source with no key simply gets skipped and the next one fills the gap.'),
     orderList,
     el('div', { class: 'grid grid-2', style: 'margin-top:18px' },
-      keyField('Discogs token', 'discogs_token', 'From your Discogs developer settings.'),
-      keyField('Last.fm API key', 'lastfm_key', 'From the Last.fm API account page.'),
-      keyField('Spotify client ID', 'spotify_client_id', 'From the Spotify developer dashboard.', 'text'),
-      keyField('Spotify client secret', 'spotify_client_secret', 'Paired with the client ID above.'))));
+      keyField('Discogs personal access token', 'discogs_token',
+        'One long string. Not the consumer key or secret from an application — those are for signing in as other people, which Harmon never does.',
+        { url: 'https://www.discogs.com/settings/developers', label: 'Generate one on Discogs' }),
+      keyField('Last.fm API key', 'lastfm_key',
+        'The API key from your account, not the shared secret.',
+        { url: 'https://www.last.fm/api/account/create', label: 'Create a Last.fm API account' }),
+      keyField('Spotify client ID', 'spotify_client_id',
+        'Create an app in the dashboard, then copy its client ID.',
+        { url: 'https://developer.spotify.com/dashboard', label: 'Open the Spotify dashboard' }, 'text'),
+      keyField('Spotify client secret', 'spotify_client_secret',
+        'Shown under the client ID once you click "View client secret".',
+        { url: 'https://developer.spotify.com/dashboard', label: 'Open the Spotify dashboard' }))));
 
   /* Enrichment */
   const fieldToggles = el('div', {},
