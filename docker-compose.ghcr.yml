@@ -1,0 +1,16 @@
+# Same as docker-compose.yml but pulls the prebuilt image instead of building.
+# Use this one in Dockhand if it will not build from a Dockerfile.
+services:
+  harmon:
+    image: ghcr.io/artech7/harmon:latest
+    container_name: harmon
+    restart: unless-stopped
+    user: "1026:100"
+    ports:
+      - "8730:8730"
+    environment:
+      - TZ=America/Denver
+    volumes:
+      - /volume1/docker/harmon/config:/config
+      - /volume1/homes/Dylan/Media/Music:/music
+      - /volume1/homes/Dylan/Media/music-originals:/originals

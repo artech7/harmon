@@ -1,0 +1,9 @@
+config/
+tests/
+.git/
+.github/
+__pycache__/
+*.pyc
+*.db*
+README.md
+docker-compose.yml

@@ -1,0 +1,26 @@
+services:
+  harmon:
+    build: .
+    image: harmon:latest
+    container_name: harmon
+    restart: unless-stopped
+
+    # Runs as you, so anything Harmon writes into your home share stays yours.
+    # Check the numbers with:  id Dylan
+    user: "1026:100"
+
+    ports:
+      - "8730:8730"
+
+    environment:
+      - TZ=America/Denver
+
+    volumes:
+      # Harmon's database and settings
+      - /volume1/docker/harmon/config:/config
+
+      # Your music library — read and written
+      - /volume1/homes/Dylan/Media/Music:/music
+
+      # Replaced sources and removed duplicates land here
+      - /volume1/homes/Dylan/Media/music-originals:/originals
