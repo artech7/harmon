@@ -34,6 +34,47 @@ CACHE_TTL_DAYS = 30
 
 _mb_lock = threading.Lock()
 _mb_last = 0.0
+_mb_backoff = 0.0        # extra seconds per request, grown when throttled
+
+# A provider that fails repeatedly is not going to start working on the next
+# track. Three strikes and it sits out the rest of the run: one line in the log
+# instead of one per track, and no wasted request every second.
+_strikes: dict[str, int] = {}
+_benched: dict[str, float] = {}
+STRIKES_BEFORE_BENCH = 3
+BENCH_SECONDS = 1800
+
+
+def _note_failure(name: str, detail: str) -> None:
+    _strikes[name] = _strikes.get(name, 0) + 1
+    if _strikes[name] == STRIKES_BEFORE_BENCH:
+        _benched[name] = time.time() + BENCH_SECONDS
+        db.log(f"{name} has failed {STRIKES_BEFORE_BENCH} times in a row "
+               f"({detail}). Skipping it for the next 30 minutes.", "warn")
+    elif _strikes[name] < STRIKES_BEFORE_BENCH:
+        db.log(f"{name} lookup failed: {detail}", "warn")
+
+
+def _note_success(name: str) -> None:
+    _strikes.pop(name, None)
+    _benched.pop(name, None)
+
+
+def is_benched(name: str) -> bool:
+    until = _benched.get(name)
+    if not until:
+        return False
+    if time.time() > until:
+        _benched.pop(name, None)
+        _strikes.pop(name, None)
+        return False
+    return True
+
+
+def revive_all() -> None:
+    """Clear every strike, so a manual retry is never blocked by an old run."""
+    _strikes.clear()
+    _benched.clear()
 _spotify_token: dict[str, Any] = {"value": None, "expires": 0.0}
 
 
@@ -89,9 +130,9 @@ def musicbrainz(track: dict) -> dict | None:
     if track.get("album"):
         query += f' AND release:"{track["album"]}"'
 
-    global _mb_last
+    global _mb_last, _mb_backoff
     with _mb_lock:
-        wait = 1.05 - (time.time() - _mb_last)
+        wait = (1.05 + _mb_backoff) - (time.time() - _mb_last)
         if wait > 0:
             time.sleep(wait)
         _mb_last = time.time()
@@ -100,9 +141,17 @@ def musicbrainz(track: dict) -> dict | None:
                 "https://musicbrainz.org/ws/2/recording",
                 params={"query": query, "fmt": "json", "limit": 5},
             )
-        except Exception as exc:
-            db.log(f"MusicBrainz lookup failed: {exc}", "warn")
-            return None
+            # Ease back towards full speed once it starts answering again.
+            _mb_backoff = max(0.0, _mb_backoff - 0.5)
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code in (429, 503):
+                _mb_backoff = min(_mb_backoff * 2 + 1, 30.0)
+                _mb_last = time.time()
+                raise RuntimeError(
+                    f"rate limited, slowing to one request every "
+                    f"{1.05 + _mb_backoff:.0f}s") from exc
+            raise
+    
 
     best, best_score = None, 0.0
     for rec in data.get("recordings", []):
@@ -189,8 +238,7 @@ def discogs(track: dict) -> dict | None:
     try:
         data = _get("https://api.discogs.com/database/search", params=params)
     except Exception as exc:
-        db.log(f"Discogs lookup failed: {exc}", "warn")
-        return None
+        raise
 
     results = data.get("results") or []
     if not results:
@@ -235,8 +283,7 @@ def lastfm(track: dict) -> dict | None:
             },
         )
     except Exception as exc:
-        db.log(f"Last.fm lookup failed: {exc}", "warn")
-        return None
+        raise
 
     info = data.get("track") or {}
     tags = [t["name"].title() for t in (info.get("toptags", {}).get("tag") or [])[:3]]
@@ -302,8 +349,7 @@ def spotify(track: dict) -> dict | None:
             headers={"Authorization": f"Bearer {token}"},
         )
     except Exception as exc:
-        db.log(f"Spotify lookup failed: {exc}", "warn")
-        return None
+        raise
 
     items = (data.get("tracks") or {}).get("items") or []
     if not items:
@@ -419,22 +465,32 @@ LOOKUPS = {
 }
 
 
-def gather(track: dict) -> list[dict]:
-    """Run every configured provider, in the order the user set, and keep the hits."""
+def gather(track: dict) -> tuple[list[dict], bool]:
+    """Run every configured provider in the order the user set.
+
+    Returns the hits, plus whether anything actually answered. A track that
+    got no answer because every source errored is different from one that
+    genuinely has no match, and only the second should count as checked.
+    """
     order = get_config()["providers"]["order"]
-    out = []
+    out: list[dict] = []
+    answered = False
+
     for name in order:
         fn = LOOKUPS.get(name)
-        if not fn:
+        if not fn or is_benched(name):
             continue
         try:
             result = fn(track)
         except Exception as exc:
-            db.log(f"{name} raised: {exc}", "warn")
-            result = None
+            _note_failure(name, str(exc)[:160])
+            continue
+        _note_success(name)
+        answered = True          # it replied, even if it had nothing to offer
         if result:
             out.append(result)
-    return out
+
+    return out, answered
 
 
 def find_art(track: dict, results: list[dict]) -> str | None:

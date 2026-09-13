@@ -130,7 +130,15 @@ def netcheck_run():
 
 @api.post("/api/providers/{name}/test")
 def test_provider(name: str):
+    providers.revive_all()   # a deliberate retry should never hit an old strike
     return providers.check(name)
+
+
+@api.get("/api/providers/state")
+def provider_state():
+    """Which sources are currently sitting out, and why."""
+    order = config.get()["providers"]["order"]
+    return {name: {"benched": providers.is_benched(name)} for name in order}
 
 
 @api.get("/api/codecs")

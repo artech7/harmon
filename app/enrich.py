@@ -36,7 +36,11 @@ def propose(track_id: int, batch: str | None = None) -> list[dict]:
     cfg = get_config()["enrich"]
     batch = batch or uuid.uuid4().hex[:12]
 
-    results = providers.gather(track)
+    results, answered = providers.gather(track)
+    if not answered:
+        # Nothing replied. Leave the track unchecked so the next run retries it
+        # rather than quietly writing it off because a source was down.
+        return []
     if not results:
         db.execute("UPDATE tracks SET enriched_at=datetime('now') WHERE id=?", (track_id,))
         return []
@@ -98,6 +102,7 @@ def propose(track_id: int, batch: str | None = None) -> list[dict]:
 
 
 def propose_many(track_ids: list[int], progress=None) -> dict:
+    providers.revive_all()   # a new run starts every source with a clean slate
     batch = uuid.uuid4().hex[:12]
     total = max(len(track_ids), 1)
     staged = 0
