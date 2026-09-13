@@ -15,7 +15,7 @@ from mutagen.flac import FLAC, Picture
 from mutagen.id3 import APIC, ID3, ID3NoHeaderError
 from mutagen.mp4 import MP4, MP4Cover
 
-from . import db, scanner
+from . import db, providers, scanner
 from .config import get as get_config
 
 EASY_KEYS = {
@@ -91,7 +91,7 @@ def _write_tag(path: str, field: str, value: str) -> None:
 
 def _embed_art(path: str, url: str, min_px: int) -> None:
     with httpx.Client(timeout=45, follow_redirects=True) as client:
-        r = client.get(url, headers={"User-Agent": "Harmon/1.0"})
+        r = client.get(url, headers={"User-Agent": providers.user_agent()})
         r.raise_for_status()
         data = r.content
         mime = r.headers.get("content-type", "image/jpeg").split(";")[0]

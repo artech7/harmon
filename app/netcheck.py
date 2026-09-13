@@ -43,6 +43,40 @@ def _resolver_reachable(servers: list[str]) -> dict:
                       + ", ".join(servers)}
 
 
+def _raw_dns(server: str, name: str = "musicbrainz.org", timeout: float = 4.0) -> bool:
+    """Ask an upstream resolver directly, bypassing whatever the container is using.
+
+    Distinguishes 'Docker is not forwarding' from 'port 53 cannot leave the NAS',
+    which need completely different fixes.
+    """
+    query = bytearray(b"\x00\x01\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00")
+    for label in name.split("."):
+        query.append(len(label))
+        query += label.encode()
+    query += b"\x00\x00\x01\x00\x01"  # root terminator, type A, class IN
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.settimeout(timeout)
+        sock.sendto(bytes(query), (server, 53))
+        reply, _ = sock.recvfrom(512)
+        sock.close()
+        return len(reply) > 12 and reply[0:2] == b"\x00\x01"
+    except OSError:
+        return False
+
+
+def _upstream_dns() -> dict:
+    working = [s for s in ("1.1.1.1", "8.8.8.8") if _raw_dns(s)]
+    if working:
+        return {"ok": True,
+                "detail": "Public DNS answers directly on " + ", ".join(working)
+                          + ". So port 53 is open and the container is simply not "
+                            "forwarding to it."}
+    return {"ok": False,
+            "detail": "Neither 1.1.1.1 nor 8.8.8.8 answered on UDP port 53. Something "
+                      "between the NAS and the internet is blocking DNS traffic."}
+
+
 def _resolves() -> dict:
     names = ["musicbrainz.org", "api.discogs.com"]
     out, failed = [], []
@@ -72,6 +106,8 @@ def run() -> dict:
     reach = _resolver_reachable(conf.get("servers", []))
     resolves = _resolves()
     egress = _egress()
+    upstream = _upstream_dns() if not resolves["ok"] else {"ok": True,
+                                                          "detail": "Not needed — names already resolve."}
 
     # If names actually resolve, a failed port-53 probe is noise: plenty of
     # setups route DNS through something that refuses a bare TCP connection.
@@ -85,6 +121,7 @@ def run() -> dict:
         {"name": "That resolver answers", **reach},
         {"name": "Domain names resolve", **resolves},
         {"name": "Traffic leaves the NAS", **egress},
+        {"name": "Public DNS answers directly", **upstream},
     ]
     for c in checks:
         c.pop("servers", None)
@@ -104,9 +141,15 @@ def run() -> dict:
         verdict = ("The DNS servers in the compose file cannot be reached from the container. "
                    "Confirm the container was recreated after you added them, not just "
                    "restarted, and try your router's address instead.")
+    elif upstream["ok"]:
+        verdict = ("Docker's built-in resolver is not passing queries upstream. The dns: block "
+                   "only takes effect when a container is created, so delete the container "
+                   "and deploy it again rather than restarting it. If that does not take, set "
+                   "the DNS on the NAS itself under Control Panel, Network, General.")
     else:
-        verdict = ("The resolver is reachable but is not answering for these names. A filtering "
-                   "DNS server such as Pi-hole is the usual cause.")
+        verdict = ("DNS traffic cannot leave the network, even though HTTPS can. A router or "
+                   "ISP that intercepts port 53 is the usual cause. Pointing the container at "
+                   "your router's own address normally works, since that is allowed to resolve.")
 
     return {"checks": checks, "verdict": verdict,
             "proxy_env": {k: v for k, v in os.environ.items() if "proxy" in k.lower()}}

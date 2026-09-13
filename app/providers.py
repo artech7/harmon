@@ -19,7 +19,17 @@ import httpx
 from . import db
 from .config import get as get_config
 
-USER_AGENT = "Harmon/1.0 (self-hosted music library tool)"
+_BASE_AGENT = "Harmon/1.0 (+https://github.com/artech7/harmon)"
+
+
+def user_agent() -> str:
+    """MusicBrainz throttles clients that do not identify themselves with a way
+    to be contacted, so fold the address from settings into the header."""
+    try:
+        email = (get_config()["providers"].get("contact_email") or "").strip()
+    except Exception:
+        email = ""
+    return f"Harmon/1.0 ( {email} )" if email else _BASE_AGENT
 CACHE_TTL_DAYS = 30
 
 _mb_lock = threading.Lock()
@@ -52,7 +62,7 @@ def _similar(a: str | None, b: str | None) -> float:
 
 def _get(url: str, **kwargs) -> Any:
     headers = kwargs.pop("headers", {})
-    headers.setdefault("User-Agent", USER_AGENT)
+    headers.setdefault("User-Agent", user_agent())
     with httpx.Client(timeout=20, follow_redirects=True) as client:
         r = client.get(url, headers=headers, **kwargs)
         r.raise_for_status()
@@ -384,6 +394,13 @@ def check(name: str) -> dict:
                 "spotify": "Spotify rejected those credentials.",
             }.get(name, "That was rejected.")
             return {"ok": False, "message": hint}
+        if code == 503 and name == "musicbrainz":
+            return {"ok": False,
+                    "message": "MusicBrainz is rate limiting Harmon. Add a contact email "
+                               "below — they throttle clients that do not identify "
+                               "themselves, and it is the usual cause of this."}
+        if code == 429:
+            return {"ok": False, "message": "Rate limited. Wait a minute and try again."}
         return {"ok": False, "message": f"The service answered with {code}."}
     except Exception as exc:
         text = str(exc)
