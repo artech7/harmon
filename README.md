@@ -135,6 +135,21 @@ the active class moved to Forge.
 Nothing in `app/` assumes it is the only tenant, so folding both into one shared
 shell later is a `web/` change, not a backend one.
 
+## If metadata lookups fail to resolve
+
+`Temporary failure in name resolution` means the container has no working DNS.
+No API key will help — nothing is reaching the internet at all. Both compose
+files set `dns:` explicitly, which fixes it in most Synology setups.
+
+To confirm from inside the container:
+
+```bash
+docker exec harmon python3 -c "import socket; print(socket.gethostbyname('musicbrainz.org'))"
+```
+
+An address means DNS works. An error means it does not, and the `dns:` entries
+are either missing or pointing somewhere unreachable from the NAS.
+
 ## Notes
 
 - The watcher polls on a timer rather than using filesystem events, which is

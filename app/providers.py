@@ -245,7 +245,7 @@ def lastfm(track: dict) -> dict | None:
 
 # --- Spotify --------------------------------------------------------------
 
-def _spotify_auth() -> str | None:
+def _spotify_auth(raise_on_error: bool = False) -> str | None:
     cfg = get_config()["providers"]
     cid, secret = cfg["spotify_client_id"], cfg["spotify_client_secret"]
     if not (cid and secret):
@@ -264,6 +264,8 @@ def _spotify_auth() -> str | None:
             payload = r.json()
     except Exception as exc:
         db.log(f"Spotify sign-in failed: {exc}", "warn")
+        if raise_on_error:
+            raise
         return None
     _spotify_token["value"] = payload["access_token"]
     _spotify_token["expires"] = time.time() + payload.get("expires_in", 3600) - 60
@@ -363,7 +365,8 @@ def check(name: str) -> dict:
             if not (cfg["spotify_client_id"] and cfg["spotify_client_secret"]):
                 return {"ok": False, "message": "Client ID and secret both needed."}
             _spotify_token["expires"] = 0  # force a fresh sign-in rather than trusting a cache
-            return ({"ok": True, "message": "Client ID and secret work."} if _spotify_auth()
+            return ({"ok": True, "message": "Client ID and secret work."}
+                    if _spotify_auth(raise_on_error=True)
                     else {"ok": False, "message": "Spotify refused the ID and secret."})
 
         return {"ok": False, "message": f"No such source: {name}"}
@@ -383,7 +386,12 @@ def check(name: str) -> dict:
             return {"ok": False, "message": hint}
         return {"ok": False, "message": f"The service answered with {code}."}
     except Exception as exc:
-        return {"ok": False, "message": f"Could not reach it: {str(exc)[:120]}"}
+        text = str(exc)
+        if "name resolution" in text or "getaddrinfo" in text or "Name or service" in text:
+            return {"ok": False, "message": "The container cannot resolve domain names. "
+                                            "This is a Docker networking problem, not a key "
+                                            "problem — see the DNS note in the README."}
+        return {"ok": False, "message": f"Could not reach it: {text[:120]}"}
 
 
 LOOKUPS = {

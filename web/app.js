@@ -679,6 +679,33 @@ async function viewSettings() {
 
   const wrap = el('div', { class: 'grid' });
 
+  /* Network diagnostics */
+  const netResult = el('div', { class: 'rows' });
+  wrap.append(el('div', { class: 'card' },
+    el('h2', {}, 'Check the connection'),
+    el('p', {}, 'If lookups fail with a name resolution error, run this. It tests one layer at a time, so the first thing that fails is the thing to fix.'),
+    el('div', { class: 'bar-actions' },
+      el('button', {
+        class: 'btn', onclick: async (e) => {
+          e.target.disabled = true;
+          netResult.innerHTML = '';
+          netResult.append(el('div', { class: 'empty' }, 'Testing…'));
+          const r = await api('/netcheck');
+          netResult.innerHTML = '';
+          r.checks.forEach((c) => netResult.append(
+            el('div', { class: 'row', style: 'grid-template-columns:1fr auto' },
+              el('div', {},
+                el('div', { class: 'row-title' }, c.name),
+                el('div', { class: 'row-sub', style: 'white-space:normal' }, c.detail)),
+              el('span', { class: c.ok ? 'pill pill-good' : 'pill pill-hot' },
+                c.ok ? 'Fine' : 'Problem'))));
+          netResult.append(el('div', { class: 'row' },
+            el('div', { class: 'row-sub', style: 'white-space:normal' }, r.verdict)));
+          e.target.disabled = false;
+        },
+      }, 'Run the check')),
+    netResult));
+
   /* Shell */
   wrap.append(el('div', { class: 'card' },
     el('h2', {}, 'Switching to Forge'),

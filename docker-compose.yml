@@ -14,6 +14,14 @@ services:
     environment:
       - TZ=America/Denver
 
+    # Synology's Docker bridge often hands containers a DNS server they cannot
+    # actually use. Without this, every metadata lookup fails with
+    # "Temporary failure in name resolution". Swap in your router or Pi-hole
+    # address if you would rather keep lookups on your own network.
+    dns:
+      - 1.1.1.1
+      - 8.8.8.8
+
     volumes:
       # Harmon's database and settings
       - /volume1/docker/harmon/config:/config

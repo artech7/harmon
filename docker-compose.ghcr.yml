@@ -10,6 +10,11 @@ services:
       - "8730:8730"
     environment:
       - TZ=America/Denver
+    # See the note in docker-compose.yml — Synology containers frequently need
+    # DNS spelled out or every metadata lookup fails to resolve.
+    dns:
+      - 1.1.1.1
+      - 8.8.8.8
     volumes:
       - /volume1/docker/harmon/config:/config
       - /volume1/homes/Dylan/Media/Music:/music

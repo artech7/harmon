@@ -10,7 +10,7 @@ from fastapi import Body, FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from . import changes, config, db, dupes, enrich, providers, scanner, transcode, worker
+from . import changes, config, db, dupes, enrich, netcheck, providers, scanner, transcode, worker
 
 WEB_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "web")
 
@@ -121,6 +121,11 @@ def put_config(patch: dict = Body(...)):
     if codec and codec not in config.CODECS:
         raise HTTPException(400, f"Unknown codec {codec}")
     return config.save(patch)
+
+
+@api.get("/api/netcheck")
+def netcheck_run():
+    return netcheck.run()
 
 
 @api.post("/api/providers/{name}/test")
