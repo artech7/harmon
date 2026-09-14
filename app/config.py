@@ -84,13 +84,14 @@ DEFAULTS: dict[str, Any] = {
         "originals_path": "/originals",
     },
     "providers": {
-        "order": ["musicbrainz", "discogs", "lastfm", "spotify"],
+        "order": ["musicbrainz", "discogs", "lastfm", "spotify", "acoustid"],
         "art_order": ["coverartarchive", "discogs", "spotify"],
         "discogs_token": "",
         "lastfm_key": "",
         "spotify_client_id": "",
         "spotify_client_secret": "",
         "contact_email": "",
+        "acoustid_key": "",
         # Point this at a local musicbrainz-docker mirror to skip the public
         # server's rate limit entirely. Empty means the public server.
         "musicbrainz_url": "",

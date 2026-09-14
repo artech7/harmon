@@ -6,7 +6,7 @@ import threading
 import time
 from datetime import datetime, time as dtime
 
-from . import changes, db, dupes, enrich, scanner, transcode
+from . import albums, changes, db, dupes, enrich, scanner, transcode
 from .config import get as get_config
 
 _pipeline_lock = threading.Lock()
@@ -89,16 +89,36 @@ def run_dupes() -> dict:
 
 
 def run_enrich(track_ids: list[int] | None = None) -> dict:
+    """Albums first, then whatever is left over one at a time.
+
+    An album lookup costs two requests and returns a whole tracklist, so doing
+    it this way round turns hours into minutes on a library that is organised
+    into albums. Only the strays pay the per-track price.
+    """
     with _pipeline_lock:
         job = _start_job("enrich")
         try:
-            ids = track_ids if track_ids is not None else enrich.pending_track_ids()
-            if not ids:
-                _finish(job, "done", "Every track has already been checked")
-                return {"staged": 0, "tracks": 0}
-            result = enrich.propose_many(ids, lambda p, m: _update(job, p, m))
-            _finish(job, "done", f"{result['staged']} suggestions ready to review")
-            return result
+            if track_ids is not None:
+                result = enrich.propose_many(track_ids, lambda p, m: _update(job, p, m))
+                _finish(job, "done", f"{result['staged']} suggestions ready to review")
+                return result
+
+            _update(job, 0.02, "Looking up albums")
+            album_result = albums.run(progress=lambda p, m: _update(job, p * 0.8, m))
+
+            leftovers = albums.loose_track_ids() + enrich.pending_track_ids()
+            leftovers = list(dict.fromkeys(leftovers))
+            track_result = {"staged": 0, "tracks": 0}
+            if leftovers:
+                _update(job, 0.82, f"{len(leftovers)} tracks need checking one by one")
+                track_result = enrich.propose_many(
+                    leftovers, lambda p, m: _update(job, 0.82 + p * 0.18, m))
+
+            staged = album_result["staged"] + track_result["staged"]
+            _finish(job, "done",
+                    f"{staged} suggestions ready to review "
+                    f"({album_result['albums']} albums, {len(leftovers)} single tracks)")
+            return {"albums": album_result, "tracks": track_result, "staged": staged}
         except Exception as exc:
             _finish(job, "failed", str(exc)[:300])
             raise

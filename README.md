@@ -38,6 +38,17 @@ skipped and the next one fills the gap.
 | Last.fm | API key | Genres people actually use |
 | Spotify | Client ID + secret | High-resolution artwork |
 
+Lookups go album-first: Harmon asks MusicBrainz for the release, which returns
+the whole tracklist in one response. That is two requests per album instead of
+one per track — on a library organised into albums, roughly a tenfold saving,
+and better matches, since a full tracklist resolves ambiguity a lone title
+cannot. Only files that belong to no recognisable album are checked one by one.
+
+AcoustID is the last resort and the most useful one for badly tagged files: it
+fingerprints the audio with `fpcalc` and matches that against MusicBrainz, so
+it does not read your tags at all. Free key, three lookups a second. The
+Metadata screen estimates what the next pass will cost before you start it.
+
 MusicBrainz allows one request per second and offers no token or paid tier that
 raises it — throttling is by User-Agent, by IP, and by how busy their servers
 are overall, so a 503 can arrive however well-behaved you are. Harmon backs off

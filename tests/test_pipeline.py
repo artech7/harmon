@@ -82,7 +82,51 @@ check("summary adds up", s2["matching"] + s2["needs_convert"] + s2["protected"],
 config.save({"target": {"codec": "opus", "bitrate": 128}})
 check("changing the target re-queues everything", transcode.stage_conversions(), 3)
 
-from app import hygiene
+from app import albums, enrich, hygiene, providers
+
+# --- album batching -------------------------------------------------------
+db.execute("UPDATE tracks SET enriched_at=NULL, album='Nightfall', "
+           "album_key='ash vector|nightfall' WHERE missing=0")
+reqs = {"n": 0}
+def _find(artist, album, count):
+    reqs["n"] += 1
+    return {"id": "rel-x", "score": 0.9}
+def _tracks(mbid):
+    reqs["n"] += 1
+    return {"album": "Nightfall", "album_artist": "Ash Vector", "year": "2019",
+            "mb_release": mbid, "tracks": [
+                {"title": "Low Tide", "artist": "Ash Vector", "track_no": 1, "disc_no": 1,
+                 "length": 6.0, "mb_recording": "r1"},
+                {"title": "Signal Drift", "artist": "Ash Vector", "track_no": 2, "disc_no": 1,
+                 "length": 7.0, "mb_recording": "r2"},
+                {"title": "Cold Room", "artist": "Ash Vector", "track_no": 3, "disc_no": 1,
+                 "length": 5.0, "mb_recording": "r3"}]}
+providers.mb_find_release, providers.mb_release_tracks = _find, _tracks
+providers.coverartarchive = lambda *a, **k: None
+
+before = db.one("SELECT COUNT(*) AS n FROM tracks WHERE missing=0")["n"]
+res = albums.run()
+check("one album costs two requests, not one per track", reqs["n"], 2)
+check("every track in the album got matched", res["matched"] > 0, True)
+check("batching staged changes", res["staged"] > 0, True)
+check("matched tracks are marked checked",
+      db.one("SELECT COUNT(*) AS n FROM tracks WHERE missing=0 AND enriched_at IS NOT NULL")["n"],
+      res["matched"])
+# The tracklist had three entries; anything extra on disk cannot be matched and
+# must stay unchecked so the per-track and fingerprint passes still see it.
+check("an unmatchable track is left for the next pass",
+      db.one("SELECT COUNT(*) AS n FROM tracks WHERE missing=0 AND enriched_at IS NULL")["n"],
+      before - res["matched"])
+check("the leftover is handed to the per-track path",
+      set(enrich.pending_track_ids()) ==
+      {r["id"] for r in db.query("SELECT id FROM tracks WHERE enriched_at IS NULL AND missing=0")},
+      True)
+
+check("fingerprinting is wired in", "acoustid" in providers.LOOKUPS, True)
+check("acoustid stays quiet without a key",
+      providers.acoustid({"path": "/nonexistent.mp3"}), None)
+
+
 check("underscore names are unpacked", hygiene.tidy("3_Doors_Down"), "3 Doors Down")
 check("AC/DC survives slash splitting", hygiene.split_credit("AC/DC"), ["AC/DC"])
 check("Earth, Wind & Fire stays one band",

@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import base64
 import json
+import shutil
+import subprocess
 import threading
 import time
 from difflib import SequenceMatcher
@@ -112,6 +114,121 @@ def _get(url: str, **kwargs) -> Any:
 
 # --- MusicBrainz ----------------------------------------------------------
 
+def mb_base() -> str:
+    mirror = (get_config()["providers"].get("musicbrainz_url") or "").rstrip("/")
+    return mirror or "https://musicbrainz.org"
+
+
+def mb_request(path: str, params: dict) -> dict:
+    """Every MusicBrainz call goes through here, so the rate limit is honoured
+    once rather than per call site. A mirror is your own hardware answering
+    your own queries, so it skips the wait entirely."""
+    base = mb_base()
+    if base != "https://musicbrainz.org":
+        return _get(base + path, params=params)
+
+    global _mb_last, _mb_backoff
+    with _mb_lock:
+        wait = (1.05 + _mb_backoff) - (time.time() - _mb_last)
+        if wait > 0:
+            time.sleep(wait)
+        _mb_last = time.time()
+        try:
+            data = _get(base + path, params=params)
+            _mb_backoff = max(0.0, _mb_backoff - 0.5)   # ease back towards full speed
+            return data
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code in (429, 503):
+                _mb_backoff = min(_mb_backoff * 2 + 1, 30.0)
+                _mb_last = time.time()
+                raise RuntimeError(
+                    f"rate limited, slowing to one request every "
+                    f"{1.05 + _mb_backoff:.0f}s") from exc
+            raise
+
+
+def mb_find_release(artist: str, album: str, track_count: int = 0) -> dict | None:
+    """Find the release that best matches an album we have on disk."""
+    key = f"mbrel:{artist}|{album}|{track_count}"
+    hit = _cached(key)
+    if hit is not None:
+        return hit or None
+
+    query = f'release:"{album}"'
+    if artist:
+        query += f' AND artist:"{artist}"'
+    if track_count:
+        query += f" AND tracks:{track_count}"
+
+    data = mb_request("/ws/2/release", {"query": query, "fmt": "json", "limit": 5})
+    releases = data.get("releases") or []
+    if not releases:
+        # Track count is a strong hint but a wrong one when the local copy is
+        # partial. Drop it and try again before giving up on the album.
+        if track_count:
+            data = mb_request("/ws/2/release", {
+                "query": f'release:"{album}"' + (f' AND artist:"{artist}"' if artist else ""),
+                "fmt": "json", "limit": 5,
+            })
+            releases = data.get("releases") or []
+        if not releases:
+            _cache(key, {})
+            return None
+
+    best, best_score = None, 0.0
+    for rel in releases:
+        credit = (rel.get("artist-credit") or [{}])[0].get("name")
+        score = 0.6 * _similar(album, rel.get("title")) + 0.4 * _similar(artist, credit)
+        if track_count:
+            counts = [m.get("track-count") or 0 for m in (rel.get("media") or [])]
+            if sum(counts) == track_count:
+                score += 0.15
+        if score > best_score:
+            best, best_score = rel, score
+
+    if not best or best_score < 0.55:
+        _cache(key, {})
+        return None
+    result = {"id": best["id"], "score": round(min(best_score, 1.0), 3)}
+    _cache(key, result)
+    return result
+
+
+def mb_release_tracks(release_mbid: str) -> dict | None:
+    """The whole tracklist in one request — the reason batching is worth doing."""
+    key = f"mbtracks:{release_mbid}"
+    hit = _cached(key)
+    if hit is not None:
+        return hit or None
+
+    data = mb_request(f"/ws/2/release/{release_mbid}",
+                      {"inc": "recordings+artist-credits", "fmt": "json"})
+    credit = (data.get("artist-credit") or [{}])[0].get("name")
+    tracks = []
+    for medium in data.get("media") or []:
+        for trk in medium.get("track") or []:
+            rec = trk.get("recording") or {}
+            trk_credit = (rec.get("artist-credit") or data.get("artist-credit") or [{}])[0]
+            tracks.append({
+                "title": trk.get("title") or rec.get("title"),
+                "artist": trk_credit.get("name"),
+                "track_no": int(trk["position"]) if str(trk.get("position", "")).isdigit() else None,
+                "disc_no": medium.get("position"),
+                "length": (rec.get("length") or trk.get("length") or 0) / 1000 or None,
+                "mb_recording": rec.get("id"),
+            })
+
+    result = {
+        "album": data.get("title"),
+        "album_artist": credit,
+        "year": (data.get("date") or "")[:4] or None,
+        "mb_release": release_mbid,
+        "tracks": tracks,
+    }
+    _cache(key, result)
+    return result
+
+
 def musicbrainz(track: dict) -> dict | None:
     """Canonical artist/album/title/track numbers. Free, but capped at 1 req/sec."""
     artist = track.get("album_artist") or track.get("artist") or ""
@@ -130,43 +247,7 @@ def musicbrainz(track: dict) -> dict | None:
     if track.get("album"):
         query += f' AND release:"{track["album"]}"'
 
-    cfg = get_config()["providers"]
-    mirror = (cfg.get("musicbrainz_url") or "").rstrip("/")
-    base = mirror or "https://musicbrainz.org"
-
-    # A mirror is your own hardware answering your own queries, so the
-    # one-per-second courtesy owed to the public servers does not apply.
-    if mirror:
-        try:
-            data = _get(f"{base}/ws/2/recording",
-                        params={"query": query, "fmt": "json", "limit": 5})
-        except Exception:
-            raise
-        return _mb_best(data, track, title, artist, key)
-
-    global _mb_last, _mb_backoff
-    with _mb_lock:
-        wait = (1.05 + _mb_backoff) - (time.time() - _mb_last)
-        if wait > 0:
-            time.sleep(wait)
-        _mb_last = time.time()
-        try:
-            data = _get(
-                f"{base}/ws/2/recording",
-                params={"query": query, "fmt": "json", "limit": 5},
-            )
-            # Ease back towards full speed once it starts answering again.
-            _mb_backoff = max(0.0, _mb_backoff - 0.5)
-        except httpx.HTTPStatusError as exc:
-            if exc.response.status_code in (429, 503):
-                _mb_backoff = min(_mb_backoff * 2 + 1, 30.0)
-                _mb_last = time.time()
-                raise RuntimeError(
-                    f"rate limited, slowing to one request every "
-                    f"{1.05 + _mb_backoff:.0f}s") from exc
-            raise
-    
-
+    data = mb_request("/ws/2/recording", {"query": query, "fmt": "json", "limit": 5})
     return _mb_best(data, track, title, artist, key)
 
 
@@ -439,6 +520,22 @@ def check(name: str) -> dict:
                 return {"ok": False, "message": data.get("message") or "Last.fm rejected the key."}
             return {"ok": True, "message": "Key works."}
 
+        if name == "acoustid":
+            if not cfg.get("acoustid_key"):
+                return {"ok": False, "message": "No key set yet."}
+            if not fpcalc_available():
+                return {"ok": False,
+                        "message": "fpcalc is missing from the container. Rebuild the "
+                                   "image so Chromaprint is installed."}
+            data = _get("https://api.acoustid.org/v2/lookup", params={
+                "client": cfg["acoustid_key"], "meta": "recordings",
+                "duration": 300, "fingerprint": "invalid", "format": "json",
+            })
+            message = (data.get("error") or {}).get("message", "")
+            if "invalid API key" in message.lower() or "invalid client" in message.lower():
+                return {"ok": False, "message": "AcoustID rejected that key."}
+            return {"ok": True, "message": "Key works and fpcalc is installed."}
+
         if name == "spotify":
             if not (cfg["spotify_client_id"] and cfg["spotify_client_secret"]):
                 return {"ok": False, "message": "Client ID and secret both needed."}
@@ -479,11 +576,105 @@ def check(name: str) -> dict:
         return {"ok": False, "message": f"Could not reach it: {text[:120]}"}
 
 
+# --- AcoustID ------------------------------------------------------------
+
+_acoustid_lock = threading.Lock()
+_acoustid_last = 0.0
+
+
+def fpcalc_available() -> bool:
+    return shutil.which("fpcalc") is not None
+
+
+def fingerprint(path: str) -> tuple[int, str] | None:
+    """Chromaprint hears the audio itself, so a wrong tag cannot mislead it."""
+    if not fpcalc_available():
+        return None
+    try:
+        out = subprocess.run(["fpcalc", "-json", path], capture_output=True,
+                             text=True, timeout=90)
+        if out.returncode != 0:
+            return None
+        data = json.loads(out.stdout)
+        return int(data["duration"]), data["fingerprint"]
+    except Exception:
+        return None
+
+
+def acoustid(track: dict) -> dict | None:
+    """Identify a file by what it sounds like rather than what it claims to be.
+
+    This is the one source that works on a file with no usable tags at all,
+    which makes it the right last resort after the album and per-track passes.
+    """
+    key_setting = get_config()["providers"].get("acoustid_key") or ""
+    path = track.get("path")
+    if not (key_setting and path):
+        return None
+    if not fpcalc_available():
+        raise RuntimeError("fpcalc is not installed in this container")
+
+    fp = fingerprint(path)
+    if not fp:
+        return None
+    duration, code = fp
+
+    cache_key = f"aid:{code[:120]}|{duration}"
+    hit = _cached(cache_key)
+    if hit is not None:
+        return hit or None
+
+    global _acoustid_last
+    with _acoustid_lock:                      # free tier allows three a second
+        wait = 0.35 - (time.time() - _acoustid_last)
+        if wait > 0:
+            time.sleep(wait)
+        _acoustid_last = time.time()
+        data = _get("https://api.acoustid.org/v2/lookup", params={
+            "client": key_setting, "duration": duration, "fingerprint": code,
+            "meta": "recordings+releasegroups+compress", "format": "json",
+        })
+
+    if data.get("status") != "ok":
+        raise RuntimeError(data.get("error", {}).get("message", "AcoustID refused the request"))
+
+    best_rec, best_score = None, 0.0
+    for result in data.get("results") or []:
+        score = float(result.get("score") or 0)
+        for rec in result.get("recordings") or []:
+            if score > best_score and rec.get("title"):
+                best_rec, best_score = rec, score
+
+    if not best_rec or best_score < 0.5:
+        _cache(cache_key, {})
+        return None
+
+    groups = best_rec.get("releasegroups") or []
+    album = next((g["title"] for g in groups if g.get("type") == "Album"), None)         or (groups[0].get("title") if groups else None)
+    artists = best_rec.get("artists") or []
+
+    result = {
+        "title": best_rec.get("title"),
+        "artist": ", ".join(a["name"] for a in artists) or None,
+        "album_artist": artists[0]["name"] if artists else None,
+        "album": album,
+        "mb_recording": best_rec.get("id"),
+        # A fingerprint match is evidence about the audio, so it earns more
+        # trust than a text match, but it says nothing about which release.
+        "score": round(min(0.55 + 0.4 * best_score, 0.95), 3),
+        "source": "acoustid",
+    }
+    result = {k: v for k, v in result.items() if v not in (None, "")}
+    _cache(cache_key, result)
+    return result
+
+
 LOOKUPS = {
     "musicbrainz": musicbrainz,
     "discogs": discogs,
     "lastfm": lastfm,
     "spotify": spotify,
+    "acoustid": acoustid,
 }
 
 

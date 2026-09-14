@@ -366,10 +366,15 @@ async function fillGroup(groupId, body) {
 
 let onlyProblems = true;
 
+const mins = (seconds) => seconds < 90 ? `${Math.round(seconds)}s`
+  : seconds < 5400 ? `${Math.round(seconds / 60)} min`
+  : `${(seconds / 3600).toFixed(1)} hours`;
+
 async function viewMetadata() {
-  const [tracks, staged] = await Promise.all([
+  const [tracks, staged, plan] = await Promise.all([
     api(`/tracks?limit=150&problems=${onlyProblems}`),
     api('/changes?status=pending&kind=tag&limit=1'),
+    api('/albums/plan'),
   ]);
 
   const bar = el('div', { class: 'bar' },
@@ -472,6 +477,22 @@ async function viewMetadata() {
     hygieneOut);
 
   const frag = document.createDocumentFragment();
+
+  if (plan.albums || plan.loose_tracks) {
+    frag.append(card('The next metadata pass',
+      'Harmon looks albums up a whole tracklist at a time, which is two requests per album instead of one per track. Only files that do not belong to a recognisable album get checked individually.',
+      el('div', { class: 'stats' },
+        stat('Albums to check', num(plan.albums), `${num(plan.album_tracks)} tracks`),
+        stat('Single tracks', num(plan.loose_tracks), 'checked one by one'),
+        stat('Estimated time', mins(plan.seconds_batched),
+          `one at a time would be ${mins(plan.seconds_per_track)}`, 'good')),
+      plan.fingerprinting
+        ? el('div', { class: 'rmeta' },
+            'Fingerprinting is on, so files with unusable tags get identified by their audio.')
+        : el('div', { class: 'rmeta' },
+            'Add an AcoustID key in Settings to identify files whose tags are too poor to match on.')));
+  }
+
   frag.append(hygieneCard);
   frag.append(card('Tag and artwork cleanup',
     'Harmon asks MusicBrainz, Discogs, Last.fm and Spotify in the order you set, takes the first answer for each field, and stages what it would change. Files stay untouched until you approve.',
@@ -777,18 +798,21 @@ async function viewSettings() {
 
   /* Providers */
   const order = [...cfg.providers.order];
-  const NAMES = { musicbrainz: 'MusicBrainz', discogs: 'Discogs', lastfm: 'Last.fm', spotify: 'Spotify' };
+  const NAMES = { musicbrainz: 'MusicBrainz', discogs: 'Discogs', lastfm: 'Last.fm',
+                  spotify: 'Spotify', acoustid: 'AcoustID' };
   const BLURB = {
     musicbrainz: 'Free and needs no key. Best for correct artist, album and track numbers.',
     discogs: 'Needs a token. Best for release years, styles and pressing detail.',
     lastfm: 'Needs a key. Best for genres people actually use.',
     spotify: 'Needs a client ID and secret. Best for high-resolution artwork.',
+    acoustid: 'Identifies a file by its audio rather than its tags, so it works where everything else fails. Free key, three lookups a second.',
   };
   const hasKey = {
     musicbrainz: true,
     discogs: Boolean(cfg.providers.discogs_token),
     lastfm: Boolean(cfg.providers.lastfm_key),
     spotify: Boolean(cfg.providers.spotify_client_id && cfg.providers.spotify_client_secret),
+    acoustid: Boolean(cfg.providers.acoustid_key),
   };
 
   const orderRows = el('div', { class: 'rows' }, order.map((name, i) => {
@@ -849,6 +873,9 @@ async function viewSettings() {
       keyField('Contact email', 'contact_email',
         'MusicBrainz asks every tool to say who is using it, and throttles the ones that do not. Nothing is sent anywhere else.',
         { url: 'https://musicbrainz.org/doc/MusicBrainz_API/Rate_Limiting', label: 'Why they ask' }, 'text'),
+      keyField('AcoustID application key', 'acoustid_key',
+        'Fingerprints the audio and matches it against MusicBrainz, ignoring your tags entirely. This is what rescues files too badly tagged for anything else to identify.',
+        { url: 'https://acoustid.org/new-application', label: 'Register an application' }, 'text'),
       keyField('Discogs personal access token', 'discogs_token',
         'One long string. Not the consumer key or secret from an application — those are for signing in as other people, which Harmon never does.',
         { url: 'https://www.discogs.com/settings/developers', label: 'Generate one on Discogs' }),

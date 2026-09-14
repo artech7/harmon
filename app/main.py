@@ -10,7 +10,7 @@ from fastapi import Body, FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from . import changes, config, db, dupes, enrich, hygiene, netcheck, providers, scanner, transcode, worker
+from . import albums, changes, config, db, dupes, enrich, hygiene, netcheck, providers, scanner, transcode, worker
 
 WEB_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "web")
 
@@ -121,6 +121,27 @@ def put_config(patch: dict = Body(...)):
     if codec and codec not in config.CODECS:
         raise HTTPException(400, f"Unknown codec {codec}")
     return config.save(patch)
+
+
+@api.get("/api/albums/plan")
+def albums_plan():
+    """What the next metadata pass will cost, before committing to it."""
+    pending = albums.groups()
+    loose = len(albums.loose_track_ids(100000))
+    album_tracks = sum(g["unchecked"] for g in pending)
+    batched = len(pending) * 2 + loose
+    per_track = album_tracks + loose
+    return {
+        "albums": len(pending),
+        "album_tracks": album_tracks,
+        "loose_tracks": loose,
+        "requests_batched": batched,
+        "requests_per_track": per_track,
+        "seconds_batched": batched,          # the public server allows one a second
+        "seconds_per_track": per_track,
+        "fingerprinting": bool(config.get()["providers"].get("acoustid_key"))
+                          and providers.fpcalc_available(),
+    }
 
 
 @api.get("/api/hygiene/preview")
