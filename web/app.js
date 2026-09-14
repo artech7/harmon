@@ -78,6 +78,50 @@ const stat = (label, value, note, tone) =>
 
 const chip = (text, tone) => el('span', { class: 'chip' + (tone ? ' ' + tone : '') }, text);
 
+/* Settings write as you go, which is only trustworthy if you can see it
+   happen. Every text field confirms its own save and reports its own failure. */
+function flashSaved(fieldNode, text = 'Saved', ok = true) {
+  let note = fieldNode.querySelector('.saved-note');
+  if (!note) {
+    note = el('span', { class: 'saved-note chip' });
+    (fieldNode.querySelector('label') || fieldNode).after(note);
+  }
+  note.textContent = text;
+  note.className = 'saved-note chip ' + (ok ? 'good' : 'hot');
+  note.style.opacity = '1';
+  clearTimeout(note._timer);
+  note._timer = setTimeout(() => { note.style.opacity = '0'; }, 2400);
+}
+
+function textField({ label, value, blurb, link, type = 'text', placeholder, save }) {
+  const input = el('input', { type, value: value || '', placeholder });
+  const field = el('div', { class: 'field' },
+    el('label', {}, label),
+    input,
+    blurb && el('small', {}, blurb, link ? ' ' : '',
+      link && el('a', { href: link.url, target: '_blank', rel: 'noopener' }, link.label)));
+
+  let last = value || '';
+  const commit = async () => {
+    const next = input.value.trim();
+    if (next === last) return;
+    try {
+      await save(next);
+      last = next;
+      flashSaved(field);
+    } catch (err) {
+      flashSaved(field, err.message || 'Not saved', false);
+    }
+  };
+
+  input.addEventListener('change', commit);   // blur, or picking from autofill
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); input.blur(); commit(); }
+  });
+  field._commit = commit;
+  return field;
+}
+
 const swRow = (title, blurb, checked, onchange) =>
   el('label', { class: 'sw' },
     el('input', { type: 'checkbox', checked: !!checked, onchange: (e) => onchange(e.target.checked) }),
@@ -560,13 +604,12 @@ async function viewFormat() {
     swRow('Keep the original after converting',
       'Sources move to your originals folder instead of being deleted, so a bad conversion is one file move from being undone.',
       target.keep_originals, (v) => save({ keep_originals: v })),
-    el('div', { class: 'field', style: 'margin-top:14px' },
-      el('label', {}, 'Originals folder'),
-      el('input', {
-        type: 'text', value: target.originals_path,
-        onchange: (e) => save({ originals_path: e.target.value }),
-      }),
-      el('small', {}, 'Replaced sources and removed duplicates both land here.'))));
+    textField({
+      label: 'Originals folder',
+      value: target.originals_path,
+      blurb: 'Replaced sources and removed duplicates both land here.',
+      save: async (v) => { state.config = await api('/config', { method: 'PUT', body: { target: { originals_path: v } } }); },
+    })));
 
   frag.append(el('div', { class: 'stats' },
     stat(`Already ${spec.label}`, num(summary.matching), null, 'good'),
@@ -853,15 +896,16 @@ async function viewSettings() {
         }, 'Down')));
   }));
 
-  const keyField = (label, key, blurb, where, type = 'password') =>
-    el('div', { class: 'field' },
-      el('label', {}, label),
-      el('input', {
-        type, value: cfg.providers[key] || '',
-        onchange: (e) => save({ providers: { [key]: e.target.value.trim() } }),
-      }),
-      el('small', {}, blurb, ' ',
-        el('a', { href: where.url, target: '_blank', rel: 'noopener' }, where.label)));
+  const keyFields = [];
+  const keyField = (label, key, blurb, where, type = 'password') => {
+    const field = textField({
+      label, blurb, link: where, type,
+      value: cfg.providers[key] || '',
+      save: (v) => save({ providers: { [key]: v } }),
+    });
+    keyFields.push(field);
+    return field;
+  };
 
   frag.append(card('Where metadata comes from',
     'Harmon asks these in order and takes the first answer for each field, so a source with no key is skipped and the next one fills the gap.',
@@ -887,7 +931,18 @@ async function viewSettings() {
         { url: 'https://developer.spotify.com/dashboard', label: 'Open the Spotify dashboard' }, 'text'),
       keyField('Spotify client secret', 'spotify_client_secret',
         'Shown under the client ID once you click "View client secret".',
-        { url: 'https://developer.spotify.com/dashboard', label: 'Open the Spotify dashboard' }))));
+        { url: 'https://developer.spotify.com/dashboard', label: 'Open the Spotify dashboard' })),
+    el('div', { class: 'bar', style: 'margin-top:4px' },
+      el('button', {
+        class: 'go', onclick: async (e) => {
+          e.target.disabled = true;
+          for (const f of keyFields) await f._commit();
+          toast('Keys saved.');
+          e.target.disabled = false;
+        },
+      }, 'Save keys'),
+      el('span', { class: 'rmeta' },
+        'Each field also saves on its own when you leave it or press Enter.'))));
 
   /* Enrichment */
   frag.append(card('What Harmon is allowed to correct',
@@ -897,20 +952,16 @@ async function viewSettings() {
       `Let Harmon correct the ${f.replace('_', ' ')} tag.`,
       on, (v) => save({ enrich: { fields: { [f]: v } } }))),
     el('div', { class: 'grid2', style: 'margin-top:18px' },
-      el('div', { class: 'field' },
-        el('label', {}, 'Minimum confidence'),
-        el('input', {
-          type: 'number', min: '0.4', max: '1', step: '0.01', value: cfg.enrich.min_confidence,
-          onchange: (e) => save({ enrich: { min_confidence: Number(e.target.value) } }),
-        }),
-        el('small', {}, 'How closely a match must line up before Harmon suggests it. 0.82 is a good balance.')),
-      el('div', { class: 'field' },
-        el('label', {}, 'Smallest artwork to accept'),
-        el('input', {
-          type: 'number', min: '200', step: '50', value: cfg.enrich.art_min_px,
-          onchange: (e) => save({ enrich: { art_min_px: Number(e.target.value) } }),
-        }),
-        el('small', {}, 'In pixels along the shorter edge.'))),
+      textField({
+        label: 'Minimum confidence', type: 'number', value: cfg.enrich.min_confidence,
+        blurb: 'How closely a match must line up before Harmon suggests it. 0.82 is a good balance.',
+        save: (v) => save({ enrich: { min_confidence: Number(v) } }),
+      }),
+      textField({
+        label: 'Smallest artwork to accept', type: 'number', value: cfg.enrich.art_min_px,
+        blurb: 'In pixels along the shorter edge.',
+        save: (v) => save({ enrich: { art_min_px: Number(v) } }),
+      })),
     swRow('Embed artwork when a track has none',
       'Downloads a front cover and writes it into the file.',
       cfg.enrich.embed_art, (v) => save({ enrich: { embed_art: v } })),
@@ -922,13 +973,11 @@ async function viewSettings() {
   frag.append(card('How duplicates are judged',
     'Two files are the same song when artist and title match after Harmon strips things like "Remastered" and "feat.", and their lengths are close enough.',
     el('div', { class: 'grid2' },
-      el('div', { class: 'field' },
-        el('label', {}, 'Length may differ by'),
-        el('input', {
-          type: 'number', min: '0', max: '30', step: '0.5', value: cfg.dupes.duration_tolerance,
-          onchange: (e) => save({ dupes: { duration_tolerance: Number(e.target.value) } }),
-        }),
-        el('small', {}, 'Seconds. Three covers different encoders and trimmed silence.')),
+      textField({
+        label: 'Length may differ by', type: 'number', value: cfg.dupes.duration_tolerance,
+        blurb: 'Seconds. Three covers different encoders and trimmed silence.',
+        save: (v) => save({ dupes: { duration_tolerance: Number(v) } }),
+      }),
       el('div', { class: 'field' },
         el('label', {}, 'Which copy to keep'),
         el('select', { onchange: (e) => save({ dupes: { keeper_rule: e.target.value } }) },
@@ -946,13 +995,10 @@ async function viewSettings() {
     swRow('Watch the library for new music',
       'Re-scans on a timer and runs new files through the whole check.',
       a.auto_scan, (v) => save({ automation: { auto_scan: v } })),
-    el('div', { class: 'field' },
-      el('label', {}, 'Check every'),
-      el('input', {
-        type: 'number', min: '1', max: '1440', value: a.scan_interval_min,
-        onchange: (e) => save({ automation: { scan_interval_min: Number(e.target.value) } }),
-      }),
-      el('small', {}, 'Minutes.')),
+    textField({
+      label: 'Check every', type: 'number', value: a.scan_interval_min, blurb: 'Minutes.',
+      save: (v) => save({ automation: { scan_interval_min: Number(v) } }),
+    }),
     swRow('Look up metadata for new tracks', 'Stages suggestions automatically after each scan.',
       a.auto_enrich, (v) => save({ automation: { auto_enrich: v } })),
     swRow('Check new tracks against your target format', 'Stages conversions for anything that does not match.',
@@ -983,14 +1029,13 @@ async function viewSettings() {
   /* Forge link */
   frag.append(card('Link to Forge',
     'Harmon and Forge stay separate apps. Set an address here and a link to Forge appears in the header — nothing more clever than that.',
-    el('div', { class: 'field' },
-      el('label', {}, 'Forge address'),
-      el('input', {
-        type: 'text', value: cfg.shell?.forge_url || '',
-        placeholder: 'https://forge.yourdomain.tld',
-        onchange: (e) => save({ shell: { forge_url: e.target.value.trim() } }, true),
-      }),
-      el('small', {}, 'Include https:// and no trailing slash. Leave it empty for no link.'))));
+    textField({
+      label: 'Forge address',
+      value: cfg.shell?.forge_url || '',
+      placeholder: 'https://forge.yourdomain.tld',
+      blurb: 'Include https:// and no trailing slash. Leave it empty for no link.',
+      save: (v) => save({ shell: { forge_url: v } }),
+    })));
 
   return frag;
 }

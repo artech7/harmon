@@ -411,6 +411,16 @@ h2{
 .field > small{font-size:12px;color:var(--muted);line-height:1.5}
 .field > small a{color:var(--signal)}
 
+/* Confirmation that a field actually saved. Sits beside the label, fades out
+   on its own — present when it matters, gone when it does not. */
+.saved-note{
+  align-self:flex-start;
+  margin:-2px 0 2px;
+  opacity:0;
+  transition:opacity .25s ease;
+  pointer-events:none;
+}
+
 input[type=text],input[type=password],input[type=number],input[type=time],
 select,textarea{
   font-family:Archivo,system-ui,sans-serif;font-size:13.5px;
