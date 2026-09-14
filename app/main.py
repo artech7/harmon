@@ -10,7 +10,7 @@ from fastapi import Body, FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from . import changes, config, db, dupes, enrich, netcheck, providers, scanner, transcode, worker
+from . import changes, config, db, dupes, enrich, hygiene, netcheck, providers, scanner, transcode, worker
 
 WEB_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "web")
 
@@ -121,6 +121,21 @@ def put_config(patch: dict = Body(...)):
     if codec and codec not in config.CODECS:
         raise HTTPException(400, f"Unknown codec {codec}")
     return config.save(patch)
+
+
+@api.get("/api/hygiene/preview")
+def hygiene_preview(allow_comma: bool = False, limit: int = 300):
+    return hygiene.preview(limit, allow_comma)
+
+
+@api.post("/api/hygiene/stage")
+def hygiene_stage(payload: dict = Body(default={})):
+    if worker.busy():
+        raise HTTPException(409, "Harmon is busy right now")
+    return {"staged": hygiene.stage(
+        bool(payload.get("allow_comma")),
+        float(payload.get("min_confidence") or 0),
+    )}
 
 
 @api.get("/api/netcheck")

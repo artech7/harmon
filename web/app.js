@@ -415,9 +415,68 @@ async function viewMetadata() {
         el('b', {}, 'Every track has what it needs'),
         'Artist, album, genre and artwork are all filled in.');
 
-  return card('Tag and artwork cleanup',
+  const hygieneOut = el('div', {});
+  let allowComma = false;
+
+  const hygieneCard = card('Tidy up artist names',
+    'Filename-style names like 3_Doors_Down, and collaborations written into the album artist, are what shatter a library into hundreds of one-album artists. This reshapes what is already in your tags — it invents nothing, and changes nothing until you approve it in Review.',
+    el('div', { class: 'bar' },
+      el('label', { class: 'rmeta', style: 'display:flex;gap:8px;align-items:center;cursor:pointer' },
+        el('input', {
+          type: 'checkbox',
+          onchange: (e) => { allowComma = e.target.checked; },
+        }),
+        'Also treat commas as separators (risky: Earth, Wind & Fire)'),
+      el('div', { class: 'push' }),
+      el('button', {
+        onclick: async (e) => {
+          e.target.disabled = true;
+          hygieneOut.innerHTML = '';
+          hygieneOut.append(el('div', { class: 'empty' }, 'Checking every track…'));
+          const r = await api(`/hygiene/preview?allow_comma=${allowComma}&limit=120`);
+          hygieneOut.innerHTML = '';
+          if (!r.total_changes) {
+            hygieneOut.append(el('div', { class: 'empty' },
+              el('b', {}, 'Your artist names are already tidy'),
+              'Nothing to reshape.'));
+            e.target.disabled = false;
+            return;
+          }
+          hygieneOut.append(el('div', { class: 'stats' },
+            stat('Artists now', num(r.artists_before)),
+            stat('After cleanup', num(r.artists_after), null, 'good'),
+            stat('Changes', num(r.total_changes), `across ${num(r.tracks)} tracks`)));
+          hygieneOut.append(el('div', { class: 'rows' }, r.items.map((it) =>
+            el('div', { class: 'row', style: 'grid-template-columns:1fr auto auto' },
+              el('div', {},
+                el('div', { class: 'diff' },
+                  el('span', { class: 'rmeta' }, it.field.replace('_', ' ')),
+                  it.old ? el('s', {}, it.old) : el('span', { class: 'rmeta' }, '(empty)'),
+                  el('em', {}, it.new)),
+                el('div', { class: 'rmeta' }, it.reason)),
+              chip(`${it.tracks} tracks`),
+              el('span', { class: 'chip mono' }, `${Math.round(it.confidence * 100)}%`)))));
+          hygieneOut.append(el('div', { class: 'bar', style: 'margin:16px 0 0' },
+            el('button', {
+              class: 'go', onclick: async () => {
+                const res = await api('/hygiene/stage', {
+                  method: 'POST', body: { allow_comma: allowComma },
+                });
+                toast(`${res.staged} name changes staged. Approve them in Review.`);
+                poll();
+              },
+            }, 'Stage these for review')));
+          e.target.disabled = false;
+        },
+      }, 'Show me what would change')),
+    hygieneOut);
+
+  const frag = document.createDocumentFragment();
+  frag.append(hygieneCard);
+  frag.append(card('Tag and artwork cleanup',
     'Harmon asks MusicBrainz, Discogs, Last.fm and Spotify in the order you set, takes the first answer for each field, and stages what it would change. Files stay untouched until you approve.',
-    bar, body);
+    bar, body));
+  return frag;
 }
 
 /* --- format ------------------------------------------------------------ */
@@ -784,6 +843,9 @@ async function viewSettings() {
     'Harmon asks these in order and takes the first answer for each field, so a source with no key is skipped and the next one fills the gap.',
     orderRows,
     el('div', { class: 'grid2', style: 'margin-top:18px' },
+      keyField('Your own MusicBrainz mirror', 'musicbrainz_url',
+        'Optional. Running musicbrainz-docker on your network means no rate limit at all — Harmon drops the one-per-second wait and runs as fast as your hardware answers. Leave empty for the public server.',
+        { url: 'https://github.com/metabrainz/musicbrainz-docker', label: 'How to run one' }, 'text'),
       keyField('Contact email', 'contact_email',
         'MusicBrainz asks every tool to say who is using it, and throttles the ones that do not. Nothing is sent anywhere else.',
         { url: 'https://musicbrainz.org/doc/MusicBrainz_API/Rate_Limiting', label: 'Why they ask' }, 'text'),

@@ -82,5 +82,22 @@ check("summary adds up", s2["matching"] + s2["needs_convert"] + s2["protected"],
 config.save({"target": {"codec": "opus", "bitrate": 128}})
 check("changing the target re-queues everything", transcode.stage_conversions(), 3)
 
+from app import hygiene
+check("underscore names are unpacked", hygiene.tidy("3_Doors_Down"), "3 Doors Down")
+check("AC/DC survives slash splitting", hygiene.split_credit("AC/DC"), ["AC/DC"])
+check("Earth, Wind & Fire stays one band",
+      len(hygiene.split_credit("Earth, Wind & Fire")), 1)
+check("collaborations split on the slash",
+      hygiene.split_credit("Adam Calhoun/Struggle Jennings"),
+      ["Adam Calhoun", "Struggle Jennings"])
+check("featured credits yield the primary artist",
+      hygiene.split_credit("Aaron Lewis feat. Willie Nelson")[0], "Aaron Lewis")
+check("a filename-shaped album artist is caught",
+      any(p["field"] == "album_artist" and p["new"] == "3 Doors Down"
+          for p in hygiene.assess({"artist": "3_Doors_Down", "album_artist": "3_Doors_Down"})),
+      True)
+check("a clean track proposes nothing",
+      hygiene.assess({"artist": "AC/DC", "album_artist": "AC/DC"}), [])
+
 print(f"\n  {ok} passed, {fail} failed")
 sys.exit(1 if fail else 0)

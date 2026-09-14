@@ -91,6 +91,9 @@ DEFAULTS: dict[str, Any] = {
         "spotify_client_id": "",
         "spotify_client_secret": "",
         "contact_email": "",
+        # Point this at a local musicbrainz-docker mirror to skip the public
+        # server's rate limit entirely. Empty means the public server.
+        "musicbrainz_url": "",
     },
     "enrich": {
         "fields": {f: True for f in ENRICH_FIELDS},

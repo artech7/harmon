@@ -38,11 +38,40 @@ skipped and the next one fills the gap.
 | Last.fm | API key | Genres people actually use |
 | Spotify | Client ID + secret | High-resolution artwork |
 
-MusicBrainz allows one request per second, so a first pass over a large library
-takes a while. Results are cached for 30 days.
+MusicBrainz allows one request per second and offers no token or paid tier that
+raises it — throttling is by User-Agent, by IP, and by how busy their servers
+are overall, so a 503 can arrive however well-behaved you are. Harmon backs off
+when that happens and eases back up as they recover. Results cache for 30 days.
+
+If a first pass over a large library is too slow, run your own copy with
+[musicbrainz-docker](https://github.com/metabrainz/musicbrainz-docker) and put
+its address in Settings. Harmon then drops the one-per-second wait entirely,
+since it is your hardware answering your own queries. Expect to give it a few
+hundred GB and a few hours to import.
 
 By default Harmon only fills in blanks. Turn on "Replace tags that are already
 filled in" if you want it to correct values you have already set.
+
+## Artist name hygiene
+
+A shattered artist list — hundreds of one-album artists, most without photos —
+is usually two problems, neither of which is missing artwork:
+
+- Names that came from filenames: `3_Doors_Down`, `A_Perfect_Circle`.
+- Collaborations written into `album_artist`, so every guest gets their own
+  artist entry.
+
+Metadata for Jellyfin, Plex and Navidrome follows one convention: `artist`
+holds the full credit, `album_artist` holds the primary artist alone. Harmon's
+Metadata screen proposes exactly that, plus mechanical name cleanup.
+
+It never changes casing — no algorithm gets `AC/DC` or `will.i.am` right, so
+casing is left to MusicBrainz. Slash splitting is guarded so `AC/DC` survives,
+and comma splitting is off by default because `Earth, Wind & Fire` is one band.
+
+Fixing the names usually fixes the missing artist images on its own: media
+servers can match `3 Doors Down` against their own metadata sources, but not
+`3_Doors_Down`.
 
 ## Format standardization
 

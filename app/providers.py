@@ -130,6 +130,20 @@ def musicbrainz(track: dict) -> dict | None:
     if track.get("album"):
         query += f' AND release:"{track["album"]}"'
 
+    cfg = get_config()["providers"]
+    mirror = (cfg.get("musicbrainz_url") or "").rstrip("/")
+    base = mirror or "https://musicbrainz.org"
+
+    # A mirror is your own hardware answering your own queries, so the
+    # one-per-second courtesy owed to the public servers does not apply.
+    if mirror:
+        try:
+            data = _get(f"{base}/ws/2/recording",
+                        params={"query": query, "fmt": "json", "limit": 5})
+        except Exception:
+            raise
+        return _mb_best(data, track, title, artist, key)
+
     global _mb_last, _mb_backoff
     with _mb_lock:
         wait = (1.05 + _mb_backoff) - (time.time() - _mb_last)
@@ -138,7 +152,7 @@ def musicbrainz(track: dict) -> dict | None:
         _mb_last = time.time()
         try:
             data = _get(
-                "https://musicbrainz.org/ws/2/recording",
+                f"{base}/ws/2/recording",
                 params={"query": query, "fmt": "json", "limit": 5},
             )
             # Ease back towards full speed once it starts answering again.
@@ -153,6 +167,11 @@ def musicbrainz(track: dict) -> dict | None:
             raise
     
 
+    return _mb_best(data, track, title, artist, key)
+
+
+def _mb_best(data: dict, track: dict, title: str, artist: str, key: str) -> dict | None:
+    """Pick the closest recording out of a MusicBrainz search response."""
     best, best_score = None, 0.0
     for rec in data.get("recordings", []):
         credit = rec.get("artist-credit") or [{}]
@@ -394,9 +413,12 @@ def check(name: str) -> dict:
     cfg = get_config()["providers"]
     try:
         if name == "musicbrainz":
-            _get("https://musicbrainz.org/ws/2/recording",
+            mirror = (cfg.get("musicbrainz_url") or "").rstrip("/")
+            _get(f"{mirror or 'https://musicbrainz.org'}/ws/2/recording",
                  params={"query": "recording:Creep", "fmt": "json", "limit": 1})
-            return {"ok": True, "message": "Reachable. No key needed."}
+            return {"ok": True,
+                    "message": "Your mirror answers. No rate limit applies."
+                               if mirror else "Reachable. No key needed."}
 
         if name == "discogs":
             token = cfg["discogs_token"]
