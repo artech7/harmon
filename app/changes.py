@@ -6,6 +6,7 @@ embeds artwork or removes files.
 """
 from __future__ import annotations
 
+import hashlib
 import os
 import shutil
 
@@ -181,6 +182,40 @@ def _embed_art(path: str, url: str, min_px: int) -> None:
         raise ValueError(f"artwork embedding is not supported for {ext} files")
 
 
+def _full_hash(path: str) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for block in iter(lambda: f.read(1024 * 1024), b""):
+            h.update(block)
+    return h.hexdigest()
+
+
+def _verify_identical(track_id: int, path: str) -> None:
+    """Before deleting a byte-identical copy, prove it really is one.
+
+    Grouping uses a cheap fingerprint — size plus the head and tail of the
+    file — which is fine for finding candidates and not good enough to delete
+    on. Read both files fully and compare. If they differ, the group was
+    wrong and nothing is removed.
+    """
+    row = db.one(
+        "SELECT g.kind, m2.track_id AS keeper_id, t2.path AS keeper_path "
+        "FROM dupe_members m JOIN dupe_groups g ON g.id = m.group_id "
+        "JOIN dupe_members m2 ON m2.group_id = g.id AND m2.keeper = 1 "
+        "JOIN tracks t2 ON t2.id = m2.track_id "
+        "WHERE m.track_id = ? AND m.keeper = 0", (track_id,),
+    )
+    if not row or row["kind"] != "identical":
+        return
+    keeper_path = row["keeper_path"]
+    if not os.path.exists(keeper_path):
+        raise ValueError("the copy being kept is no longer on disk")
+    if _full_hash(path) != _full_hash(keeper_path):
+        raise ValueError(
+            "these files are not actually identical — refusing to delete"
+        )
+
+
 def _delete_file(path: str) -> None:
     cfg = get_config()["target"]
     if cfg["keep_originals"]:
@@ -217,6 +252,7 @@ def apply_approved(progress=None) -> dict:
             elif row["kind"] == "art":
                 _embed_art(row["path"], row["new_value"], min_px)
             elif row["kind"] == "delete":
+                _verify_identical(row["track_id"], row["path"])
                 _delete_file(row["path"])
                 db.execute("UPDATE tracks SET missing=1 WHERE id=?", (row["track_id"],))
             else:
@@ -252,10 +288,14 @@ def stage_deletes(group_id: int) -> int:
     if not group or group["kind"] == "cross_album":
         return 0
     members = db.query(
-        "SELECT m.track_id, m.reason, t.path, t.size FROM dupe_members m "
+        "SELECT m.track_id, m.reason, t.path, t.size, t.folder FROM dupe_members m "
         "JOIN tracks t ON t.id=m.track_id WHERE m.group_id=? AND m.keeper=0",
         (group_id,),
     )
+    all_folders = {r["folder"] for r in db.query(
+        "SELECT t.folder FROM dupe_members m JOIN tracks t ON t.id=m.track_id "
+        "WHERE m.group_id=?", (group_id,))}
+    same_folder = len(all_folders) == 1
     for m in members:
         exists = db.one(
             "SELECT id FROM changes WHERE track_id=? AND kind='delete' "
@@ -265,8 +305,10 @@ def stage_deletes(group_id: int) -> int:
             continue
         db.execute(
             "INSERT INTO changes(kind, track_id, field, old_value, new_value, source, confidence) "
-            "VALUES('delete',?,'file',?,'removed','duplicate-scan',0.95)",
-            (m["track_id"], m["path"]),
+            "VALUES('delete',?,'file',?,'removed',?,?)",
+            (m["track_id"], m["path"],
+             "duplicate-scan" if same_folder else "duplicate-scan-cross-folder",
+             0.95 if same_folder else 0.72),
         )
     db.execute("UPDATE dupe_groups SET reviewed=1 WHERE id=?", (group_id,))
     return len(members)

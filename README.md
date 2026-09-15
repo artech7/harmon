@@ -25,6 +25,25 @@ Matching strips things like `(Remastered)`, `- 2019 Remaster`, `(feat. …)` and
 Remixes, live takes and acoustic versions are deliberately *not* stripped —
 those are different recordings.
 
+### What stops it deleting the wrong thing
+
+The album tag alone is not trusted, because trusting it causes real damage:
+
+- **An empty album tag** would otherwise make every untagged track by an
+  artist share one key, so a studio cut and a live cut of the same song look
+  like two copies inside one album. When the album tag is blank, the folder
+  decides instead — in any normal library the folder *is* the album.
+- **Different discs never group.** Disc 2's "Intro" is not a duplicate of
+  disc 1's "Intro".
+- **Byte-identical copies are read in full and compared before deletion.**
+  Grouping uses a cheap fingerprint (size plus head and tail); that is fine
+  for finding candidates and not good enough to delete on. If the full
+  contents differ, the deletion is refused and recorded as failed.
+- **Copies spread across folders are staged at lower confidence** and flagged
+  in the UI, so they land in a different band in Review from copies sitting
+  together in one folder.
+- **Nothing is deleted.** Removed files move to your originals folder.
+
 ## Metadata
 
 Sources are asked in the order you set on the Settings screen. The first one

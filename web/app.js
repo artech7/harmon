@@ -462,6 +462,16 @@ async function fillGroup(groupId, body) {
   const detail = await api('/dupes/' + groupId);
   const readOnly = detail.kind === 'cross_album';
 
+  // Whether the copies share a folder is the thing worth knowing before
+  // deleting one, so say it plainly rather than leaving it to be inferred
+  // from the paths underneath.
+  if (!readOnly) {
+    body.append(el('div', { class: 'bar', style: 'margin:0 0 4px' },
+      detail.same_folder
+        ? chip('All copies are in one folder', 'good')
+        : chip(`Spread across ${detail.folders.length} folders — check before deleting`, 'hot')));
+  }
+
   detail.members.forEach((m) => {
     body.append(el('div', { class: 'copy' + (m.keeper ? ' keeper' : '') },
       readOnly ? el('span', {}) : el('input', {
@@ -474,8 +484,14 @@ async function fillGroup(groupId, body) {
       el('div', {},
         el('div', { class: 'rname' },
           `${(m.codec || '?').toUpperCase()} · ${m.bitrate || '?'} kbps · ${bytes(m.size)}`),
+        el('div', { class: 'rmeta' },
+          [m.album || 'No album tag',
+           m.disc_no ? `disc ${m.disc_no}` : null,
+           m.duration ? `${Math.round(m.duration)}s` : null].filter(Boolean).join('  ·  ')),
         el('div', { class: 'rpath' }, m.path),
-        el('div', { class: 'rmeta' }, m.album || 'No album tag')),
+        el('button', {
+          class: 'jump', onclick: () => openFolderFor(m.id),
+        }, 'Open this folder')),
       chip(m.reason, m.keeper ? 'good' : null)));
   });
 
@@ -488,7 +504,8 @@ async function fillGroup(groupId, body) {
           poll();
         },
       }, 'Stage the other copies for removal'),
-      el('span', { class: 'rmeta' }, 'Removed files move to your originals folder, not the bin.')));
+      el('span', { class: 'rmeta' },
+        'Removed files move to your originals folder, not the bin. Byte-identical copies are read in full and compared before anything is deleted.')));
   }
 }
 

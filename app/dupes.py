@@ -18,6 +18,23 @@ CODEC_RANK = {
 }
 
 
+def _bucket(track: dict) -> tuple:
+    """What counts as "the same album" for the purpose of deleting something.
+
+    The album tag alone is not enough, and trusting it causes real damage:
+
+    - An empty album tag makes every untagged track by an artist share one
+      key, so a studio cut and a live cut of the same song look like copies
+      sitting in one album. They are not. Fall back to the folder, which in
+      any normal library is the album.
+    - Disc 2's "Intro" is not a duplicate of disc 1's "Intro". Different
+      discs never share a bucket.
+    """
+    album = (track.get("album") or "").strip()
+    identity = track["album_key"] if album else (track.get("folder") or track["path"])
+    return (identity, track.get("disc_no") or 0)
+
+
 def _score(track: dict, rule: str) -> tuple:
     codec = CODEC_RANK.get((track.get("codec") or "").lower(), 10)
     bitrate = track.get("bitrate") or 0
@@ -133,9 +150,9 @@ def find() -> dict:
         for idx, cluster in enumerate(clusters):
             if len(cluster) < 2:
                 continue
-            albums: dict[str, list[dict]] = defaultdict(list)
+            albums: dict[tuple, list[dict]] = defaultdict(list)
             for t in cluster:
-                albums[t["album_key"] or ""].append(t)
+                albums[_bucket(t)].append(t)
 
             for album_key, members in albums.items():
                 if len(members) < 2:
@@ -169,12 +186,21 @@ def group_detail(group_id: int) -> dict | None:
     g = db.one("SELECT * FROM dupe_groups WHERE id=?", (group_id,))
     if not g:
         return None
-    members = db.query(
+    members = db.rows_to_dicts(db.query(
         "SELECT t.*, m.keeper, m.reason FROM dupe_members m "
         "JOIN tracks t ON t.id = m.track_id WHERE m.group_id=? ORDER BY m.keeper DESC",
         (group_id,),
-    )
-    return {**dict(g), "members": db.rows_to_dicts(members)}
+    ))
+    folders = {m.get("folder") for m in members}
+    return {
+        **dict(g),
+        "members": members,
+        # Copies in one folder are an album with a duplicate in it. Copies
+        # spread across folders are two albums that happen to share a name,
+        # and deserve a look before anything is deleted.
+        "same_folder": len(folders) == 1,
+        "folders": sorted(f for f in folders if f),
+    }
 
 
 def list_groups(kind: str | None = None, limit: int = 200, offset: int = 0) -> list[dict]:

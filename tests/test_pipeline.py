@@ -232,6 +232,21 @@ check("one unsupported source stays low-confidence", _c2 < 0.75, True)
 _g3, _ = genres.resolve({"album_artist": "10 Years"}, [{"source": "discogs", "genre": "Polka"}])
 check("a later bad lookup cannot split an artist", "Polka" in (_g3 or ""), False)
 
+# --- duplicate safety -----------------------------------------------------
+check("an empty album tag falls back to the folder",
+      dupes._bucket({"album": None, "album_key": "x|", "folder": "/a", "path": "/a/1.mp3"})[0],
+      "/a")
+check("different folders never share a bucket when untagged",
+      dupes._bucket({"album": None, "album_key": "x|", "folder": "/a", "path": "/a/1.mp3"})
+      != dupes._bucket({"album": None, "album_key": "x|", "folder": "/b", "path": "/b/1.mp3"}),
+      True)
+check("different discs never share a bucket",
+      dupes._bucket({"album": "Box", "album_key": "x|box", "disc_no": 1, "folder": "/a"})
+      != dupes._bucket({"album": "Box", "album_key": "x|box", "disc_no": 2, "folder": "/a"}),
+      True)
+check("a tagged album still buckets by album",
+      dupes._bucket({"album": "Box", "album_key": "x|box", "folder": "/a"})[0], "x|box")
+
 check("fingerprinting is wired in", "acoustid" in providers.LOOKUPS, True)
 check("acoustid stays quiet without a key",
       providers.acoustid({"path": "/nonexistent.mp3"}), None)
