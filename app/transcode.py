@@ -197,6 +197,29 @@ def convert(track_id: int, progress=None) -> dict:
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
+def reconcile_pending() -> int:
+    """Drop staged conversions that the current target no longer asks for.
+
+    Changes are staged against the settings in force at the time. Switch from
+    a fixed bitrate to codec-only and yesterday's queue is still full of files
+    that now need nothing done to them. Nothing else re-reads that queue, so
+    it has to be re-read here.
+    """
+    rows = db.query(
+        "SELECT c.id, c.track_id FROM changes c WHERE c.kind='convert' AND c.status='pending'"
+    )
+    dropped = 0
+    for row in rows:
+        track = db.one("SELECT * FROM tracks WHERE id=?", (row["track_id"],))
+        if not track or track["missing"] or assess(dict(track))["action"] != "convert":
+            db.execute("DELETE FROM changes WHERE id=?", (row["id"],))
+            dropped += 1
+    if dropped:
+        db.log(f"Dropped {dropped} queued conversions that your current format "
+               f"settings no longer ask for")
+    return dropped
+
+
 def stage_conversions(track_ids: list[int] | None = None) -> int:
     """Queue every track that does not match the target format, pending approval."""
     if track_ids:
@@ -205,6 +228,8 @@ def stage_conversions(track_ids: list[int] | None = None) -> int:
                         tuple(track_ids))
     else:
         rows = db.query("SELECT * FROM tracks WHERE missing=0")
+
+    reconcile_pending()
 
     doomed = {
         r["track_id"] for r in db.query(
@@ -241,6 +266,7 @@ def stage_conversions(track_ids: list[int] | None = None) -> int:
 
 def library_summary() -> dict:
     """What the library looks like against the target, for the Standardize screen."""
+    reconcile_pending()
     rows = db.query("SELECT * FROM tracks WHERE missing=0")
     summary = {"matching": 0, "needs_convert": 0, "protected": 0, "by_codec": {}, "reasons": {}}
     bucket = {"match": "matching", "convert": "needs_convert", "protected": "protected"}

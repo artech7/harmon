@@ -103,6 +103,31 @@ config.save({"target": {"bitrate_mode": "fixed"}})
 check("fixed mode still re-encodes an over-target file",
       transcode.assess({"codec": "aac", "bitrate": 320, "lossless": 0})["action"], "convert")
 
+# Changing the target must invalidate conversions queued under the old one.
+# Needs MP3s at a bitrate the fixed target dislikes but codec-only accepts.
+db.execute("DELETE FROM changes WHERE kind='convert'")
+for _i in range(15):
+    db.execute("INSERT INTO tracks(path,title,codec,bitrate,lossless,missing) "
+               "VALUES(?,?,'mp3',192,0,0)", (f"/modetest/{_i}.mp3", f"M{_i}"))
+mode_ids = [r["id"] for r in db.query("SELECT id FROM tracks WHERE path LIKE '/modetest/%'")]
+
+config.save({"target": {"codec": "mp3", "bitrate": 320, "bitrate_mode": "fixed",
+                        "skip_if_lower_bitrate": False, "convert_lossless": False}})
+queued_fixed = transcode.stage_conversions(mode_ids)
+check("fixed mode queues the under-bitrate MP3s", queued_fixed, 15)
+config.save({"target": {"bitrate_mode": "codec_only"}})
+_marks = ",".join("?" for _ in mode_ids)
+left = db.one(f"SELECT COUNT(*) AS n FROM changes WHERE kind='convert' "
+              f"AND status='pending' AND track_id IN ({_marks})", tuple(mode_ids))["n"]
+check("switching modes clears conversions no longer wanted", left, 0)
+check("what remains really does still need converting",
+      all(transcode.assess(dict(db.one("SELECT * FROM tracks WHERE id=?", (r["track_id"],))))
+          ["action"] == "convert"
+          for r in db.query("SELECT track_id FROM changes "
+                            "WHERE kind='convert' AND status='pending'")), True)
+db.execute("DELETE FROM changes WHERE kind='convert'")
+db.execute("DELETE FROM tracks WHERE path LIKE '/modetest/%'")
+
 # --- folder browsing ------------------------------------------------------
 listing = browse.listing(LIB)
 check("browsing finds the album folders", len(listing["folders"]) > 0, True)

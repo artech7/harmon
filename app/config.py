@@ -144,8 +144,15 @@ def get() -> dict:
 
 
 def save(patch: dict) -> dict:
-    merged = deep_merge(get(), patch)
+    before = get()
+    merged = deep_merge(before, patch)
     db.set_setting("config", merged)
+
+    # A different target makes the queued conversions stale, so clear the ones
+    # it no longer asks for rather than leaving them to confuse the counts.
+    if merged["target"] != before["target"]:
+        from . import transcode
+        transcode.reconcile_pending()
     return merged
 
 
