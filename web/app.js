@@ -1,6 +1,15 @@
 /* Harmon front end. Vanilla, tab-switched, one file. */
 
 const $ = (sel, root = document) => root.querySelector(sel);
+
+/* Set a property on a node that might not be there. The browser caches HTML
+   and JS separately, so the two can briefly disagree after a deploy; that is
+   a reason to skip an update, not to throw on every poll. */
+function setProp(sel, prop, value) {
+  const node = typeof sel === 'string' ? $(sel) : sel;
+  if (node) node[prop] = value;
+  return node;
+}
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 
 const el = (tag, attrs = {}, ...kids) => {
@@ -35,9 +44,20 @@ async function api(path, options = {}) {
   return data;
 }
 
+const _recentToasts = new Map();
+
 function toast(message, bad = false) {
+  const host = $('#toasts');
+  if (!host) return;
+
+  // Background polling can fail on a timer. Showing the same message every
+  // few seconds buries the screen without telling you anything new.
+  const last = _recentToasts.get(message);
+  if (last && Date.now() - last < 20000) return;
+  _recentToasts.set(message, Date.now());
+
   const node = el('div', { class: 'toast' + (bad ? ' bad' : '') }, message);
-  $('#toasts').append(node);
+  host.append(node);
   setTimeout(() => node.remove(), 5200);
 }
 
@@ -216,11 +236,29 @@ async function render() {
 
 let lastWorkerKind = null;
 
+let pollFailures = 0;
+
 async function poll() {
   try {
     state.status = await api('/status');
-  } catch { return; }
-  const s = state.status;
+    pollFailures = 0;
+  } catch {
+    // The server may simply be restarting. Say something only once it is
+    // clearly not coming back.
+    if (++pollFailures === 8) toast('Lost contact with Harmon. Is the container running?', true);
+    return;
+  }
+
+  try {
+    paint(state.status);
+  } catch (err) {
+    if (++pollFailures === 3) {
+      toast('The page and the server are running different versions. A hard refresh should fix it.', true);
+    }
+  }
+}
+
+function paint(s) {
 
   const w = s.worker;
   const busy = Boolean(w.kind);
@@ -231,11 +269,13 @@ async function poll() {
   const label = w.cancelling ? 'Stopping…'
     : busy ? (w.label || w.kind) + (w.stage ? ` · ${w.stage}` : '')
     : 'Idle';
-  $('#job-label').textContent = label;
-  $('#job-detail').textContent = busy
+  const detail = busy
     ? [w.message, w.started_at ? elapsed(w.started_at) : null].filter(Boolean).join('  ·  ')
     : '';
-  $('#job-detail').title = busy ? w.message : '';
+  setProp('#job-label', 'textContent', label);
+  setProp('#job-detail', 'textContent', detail);
+  setProp('#job-detail', 'title', busy ? w.message : '');
+  setProp('#worker-text', 'textContent', busy ? w.message : 'Idle');  // older markup
   // Throttling and benched sources explain a slow pass, so say so in the
   // header rather than leaving it to be inferred from the activity log.
   const src = s.sources || {};
@@ -248,22 +288,28 @@ async function poll() {
   }
   let noteEl = $('#source-note');
   if (!noteEl) {
-    noteEl = el('span', { class: 'chip wait', id: 'source-note' });
-    $('#job-detail').after(noteEl);
+    const anchor = $('#job-detail') || $('#worker-text');
+    if (anchor) {
+      noteEl = el('span', { class: 'chip wait', id: 'source-note' });
+      anchor.after(noteEl);
+    }
   }
-  noteEl.textContent = notes.join(' · ');
-  noteEl.hidden = !notes.length;
+  if (noteEl) {
+    noteEl.textContent = notes.join(' · ');
+    noteEl.hidden = !notes.length;
+  }
 
-  $('#btn-stop').hidden = !busy;
-  $('#btn-stop').disabled = Boolean(w.cancelling);
-  $('#worker-bar').style.width = busy ? `${Math.round(w.progress * 100)}%` : '0%';
-  $('#btn-scan').disabled = busy;
-  $('#btn-pipeline').disabled = busy;
+  setProp('#btn-stop', 'hidden', !busy);
+  setProp('#btn-stop', 'disabled', Boolean(w.cancelling));
+  const bar = $('#worker-bar');
+  if (bar) bar.style.width = busy ? `${Math.round(w.progress * 100)}%` : '0%';
+  setProp('#btn-scan', 'disabled', busy);
+  setProp('#btn-pipeline', 'disabled', busy);
 
-  $('#badge-review').textContent = s.changes.pending || '';
-  $('#badge-dupes').textContent =
-    (s.duplicates.same_album || 0) + (s.duplicates.identical || 0) || '';
-  $('#badge-format').textContent = s.changes.by_kind?.convert || '';
+  setProp('#badge-review', 'textContent', s.changes.pending || '');
+  setProp('#badge-dupes', 'textContent',
+    (s.duplicates.same_album || 0) + (s.duplicates.identical || 0) || '');
+  setProp('#badge-format', 'textContent', s.changes.by_kind?.convert || '');
 
   if (lastWorkerKind && !s.worker.kind) {
     render();
