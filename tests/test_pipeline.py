@@ -244,8 +244,20 @@ check("different discs never share a bucket",
       dupes._bucket({"album": "Box", "album_key": "x|box", "disc_no": 1, "folder": "/a"})
       != dupes._bucket({"album": "Box", "album_key": "x|box", "disc_no": 2, "folder": "/a"}),
       True)
-check("a tagged album still buckets by album",
-      dupes._bucket({"album": "Box", "album_key": "x|box", "folder": "/a"})[0], "x|box")
+check("the folder leads the bucket",
+      dupes._bucket({"album": "Box", "album_key": "x|box", "folder": "/a"})[0], "/a")
+# Three Coldplay releases all mistagged "Greatest Songs" must stay separate.
+_wrong_tag = {"album": "Greatest Songs", "album_key": "coldplay|greatest songs", "disc_no": 1}
+check("a wrong album tag cannot merge different folders",
+      len({dupes._bucket({**_wrong_tag, "folder": f})
+           for f in ("/m/Coldplay/Viva", "/m/Coldplay/Violet_Hill", "/m/Coldplay/Prospekt")}),
+      3)
+check("one folder with two albums still separates them",
+      dupes._bucket({"album": "A", "album_key": "x|a", "folder": "/f"})
+      != dupes._bucket({"album": "B", "album_key": "x|b", "folder": "/f"}), True)
+check("a real in-folder duplicate still groups",
+      dupes._bucket({"album": "X&Y", "album_key": "c|x y", "folder": "/f"})
+      == dupes._bucket({"album": "X&Y", "album_key": "c|x y", "folder": "/f"}), True)
 
 check("fingerprinting is wired in", "acoustid" in providers.LOOKUPS, True)
 check("acoustid stays quiet without a key",

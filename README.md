@@ -29,10 +29,13 @@ those are different recordings.
 
 The album tag alone is not trusted, because trusting it causes real damage:
 
-- **An empty album tag** would otherwise make every untagged track by an
-  artist share one key, so a studio cut and a live cut of the same song look
-  like two copies inside one album. When the album tag is blank, the folder
-  decides instead — in any normal library the folder *is* the album.
+- **The folder has to agree, not just the tag.** Tags are the least reliable
+  thing in a library: three different Coldplay releases can all carry the album
+  name "Greatest Songs" because one bad tagger got at them, and trusting that
+  groups a single, a standard album and a deluxe edition into one pile with two
+  of them marked for deletion. A removal needs the folder *and* the album tag
+  to agree. Genuinely redundant copies across folders are still caught by the
+  byte-identical check, which verifies contents in full.
 - **Different discs never group.** Disc 2's "Intro" is not a duplicate of
   disc 1's "Intro".
 - **Byte-identical copies are read in full and compared before deletion.**

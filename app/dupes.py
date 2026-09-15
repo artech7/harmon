@@ -7,6 +7,7 @@ Only copies sitting inside the same album are treated as real duplicates.
 """
 from __future__ import annotations
 
+import os
 from collections import defaultdict
 
 from . import db
@@ -21,18 +22,20 @@ CODEC_RANK = {
 def _bucket(track: dict) -> tuple:
     """What counts as "the same album" for the purpose of deleting something.
 
-    The album tag alone is not enough, and trusting it causes real damage:
+    The folder has to agree, not just the tag. Tags are the least reliable
+    thing in a library — three different Coldplay releases can all carry the
+    album name "Greatest Songs" because one bad tagger got at them, and
+    trusting that groups a single, a standard album and a deluxe edition into
+    one pile with two of them marked for deletion.
 
-    - An empty album tag makes every untagged track by an artist share one
-      key, so a studio cut and a live cut of the same song look like copies
-      sitting in one album. They are not. Fall back to the folder, which in
-      any normal library is the album.
-    - Disc 2's "Intro" is not a duplicate of disc 1's "Intro". Different
-      discs never share a bucket.
+    A folder is what the person who built the library actually decided. So a
+    removal needs both to agree: same folder *and* same album tag, on the same
+    disc. Copies that are genuinely redundant across folders are still caught
+    by the byte-identical check, which verifies the contents in full.
     """
     album = (track.get("album") or "").strip()
-    identity = track["album_key"] if album else (track.get("folder") or track["path"])
-    return (identity, track.get("disc_no") or 0)
+    folder = track.get("folder") or os.path.dirname(track.get("path") or "")
+    return (folder, track["album_key"] if album else "", track.get("disc_no") or 0)
 
 
 def _score(track: dict, rule: str) -> tuple:
