@@ -17,8 +17,9 @@ from . import db, enrich, providers
 from .config import ENRICH_FIELDS, get as get_config
 from .scanner import normalize
 
-# Fields an album lookup can speak to. Genre is absent on purpose — MusicBrainz
-# releases carry no usable genre, so that still comes from the other sources.
+# Fields an album lookup can speak to. Genre is absent on purpose: a release
+# lookup carries no usable genre, and genre belongs to the artist anyway, so
+# it is decided by vote in genres.py during the per-track pass.
 ALBUM_FIELDS = ["artist", "album_artist", "album", "title", "track_no", "disc_no", "year"]
 
 

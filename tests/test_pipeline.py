@@ -205,6 +205,33 @@ check("rate limits get more rope than hard errors",
 providers.revive_all()
 check("reviving clears the bench", providers.is_benched("musicbrainz"), False)
 
+# --- genres ---------------------------------------------------------------
+from app import genres
+check("listener tags are not genres", genres.looks_like_genre("seen live"), False)
+check("decade tags are not genres", genres.looks_like_genre("00s"), False)
+check("nationality is not a genre", genres.looks_like_genre("american"), False)
+check("compound genres survive", genres.looks_like_genre("alternative metal"), True)
+check("junk is filtered out of a tag list",
+      genres.clean_tags(["seen live", "alternative metal", "00s", "nu metal"]),
+      ["Alternative Metal", "Nu Metal"])
+
+db.execute("DELETE FROM provider_cache WHERE key LIKE 'genre:%'")
+_g, _c = genres.resolve({"album_artist": "10 Years"}, [
+    {"source": "discogs", "genre": "Jazz"},
+    {"source": "lastfm", "genre": "Alternative Metal; Nu Metal"},
+    {"source": "spotify", "genre": "Alternative Metal"},
+])
+check("agreement beats a single wrong source", _g.split(";")[0].strip(), "Alternative Metal")
+check("the outlier is dropped entirely", "Jazz" in _g, False)
+check("agreement raises confidence", _c > 0.7, True)
+
+db.execute("DELETE FROM provider_cache WHERE key LIKE 'genre:%'")
+_g2, _c2 = genres.resolve({"album_artist": "Nobody"}, [{"source": "discogs", "genre": "Jazz"}])
+check("one unsupported source stays low-confidence", _c2 < 0.75, True)
+
+_g3, _ = genres.resolve({"album_artist": "10 Years"}, [{"source": "discogs", "genre": "Polka"}])
+check("a later bad lookup cannot split an artist", "Polka" in (_g3 or ""), False)
+
 check("fingerprinting is wired in", "acoustid" in providers.LOOKUPS, True)
 check("acoustid stays quiet without a key",
       providers.acoustid({"path": "/nonexistent.mp3"}), None)

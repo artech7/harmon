@@ -10,7 +10,7 @@ from fastapi import Body, FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from . import albums, browse, changes, config, db, dupes, enrich, hygiene, netcheck, providers, scanner, transcode, worker
+from . import albums, browse, changes, config, db, dupes, enrich, genres, hygiene, netcheck, providers, scanner, transcode, worker
 
 WEB_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "web")
 
@@ -249,6 +249,24 @@ def stage_all_dupes():
 def change_list(status: str = "pending", kind: str | None = None,
                 limit: int = 300, offset: int = 0):
     return {"counts": changes.counts(), "items": changes.listing(status, kind, limit, offset)}
+
+
+@api.post("/api/genres/reset")
+def genres_reset():
+    """Forget every cached genre and drop the staged genre changes.
+
+    Worth doing after the matching rules change, since anything decided under
+    the old ones is still sitting in the queue.
+    """
+    cached = db.one("SELECT COUNT(*) AS n FROM provider_cache WHERE key LIKE 'genre:%'")["n"]
+    db.execute("DELETE FROM provider_cache WHERE key LIKE 'genre:%'")
+    staged = db.one("SELECT COUNT(*) AS n FROM changes "
+                    "WHERE field='genre' AND status='pending'")["n"]
+    db.execute("DELETE FROM changes WHERE field='genre' AND status='pending'")
+    db.execute("UPDATE tracks SET enriched_at=NULL WHERE id IN "
+               "(SELECT track_id FROM changes WHERE field='genre')")
+    db.log(f"Cleared {cached} cached artist genres and {staged} staged genre changes")
+    return {"cached_cleared": cached, "staged_cleared": staged}
 
 
 @api.get("/api/browse")

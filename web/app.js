@@ -639,6 +639,19 @@ async function viewMetadata() {
         el('b', {}, 'Every track has what it needs'),
         'Artist, album, genre and artwork are all filled in.');
 
+  const genreCard = card('Genres look wrong?',
+    'Genres are decided by agreement between Last.fm, Discogs and Spotify, filtered to tags that are actually genres, and settled once per artist rather than per track. If you have genres staged from before that was true, clear them and run the lookup again.',
+    el('div', { class: 'bar' },
+      el('button', {
+        class: 'warn', onclick: async (e) => {
+          e.target.disabled = true;
+          const r = await api('/genres/reset', { method: 'POST', body: {} });
+          toast(`Cleared ${num(r.staged_cleared)} staged genres and ${num(r.cached_cleared)} cached artists.`);
+          render(); poll();
+        },
+      }, 'Clear genres and start over'),
+      el('span', { class: 'rmeta' }, 'Only affects genre. Nothing already written to your files changes.')));
+
   const hygieneOut = el('div', {});
   let allowComma = false;
 
@@ -712,6 +725,7 @@ async function viewMetadata() {
             'Add an AcoustID key in Settings to identify files whose tags are too poor to match on.')));
   }
 
+  frag.append(genreCard);
   frag.append(hygieneCard);
   frag.append(card('Tag and artwork cleanup',
     'Harmon asks MusicBrainz, Discogs, Last.fm and Spotify in the order you set, takes the first answer for each field, and stages what it would change. Files stay untouched until you approve.',

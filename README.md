@@ -67,6 +67,22 @@ its address in Settings. Harmon then drops the one-per-second wait entirely,
 since it is your hardware answering your own queries. Expect to give it a few
 hundred GB and a few hours to import.
 
+### Genres
+
+Genre is the field most likely to be wrong, so it is handled separately from
+the rest. Harmon filters out tags that are not genres (`seen live`, `00s`,
+`american`, `female vocalists`), decides by agreement between the sources
+rather than taking whichever answered first, and settles it once per artist so
+a band cannot end up spread across four genres. A single unsupported answer
+stays at low confidence and lands in the low band in Review.
+
+Discogs results are matched against the artist and album before anything is
+read from them. Taking the top search result unchecked is how a metal band
+ends up tagged Jazz.
+
+If genres were staged before this, clear them from the Metadata screen and run
+the lookup again.
+
 By default Harmon only fills in blanks. Turn on "Replace tags that are already
 filled in" if you want it to correct values you have already set.
 

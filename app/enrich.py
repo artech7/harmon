@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import uuid
 
-from . import db, providers
+from . import db, genres, providers
 from .config import ENRICH_FIELDS, get as get_config
 from .scanner import normalize
 
@@ -53,7 +53,16 @@ def propose(track_id: int, batch: str | None = None) -> list[dict]:
     for field in ENRICH_FIELDS:
         if not cfg["fields"].get(field, True):
             continue
-        resolved = _resolve(field, results)
+
+        if field == "genre":
+            # Genre belongs to the artist and benefits from agreement, so it
+            # is decided by vote rather than by whichever source answered first.
+            value, score = genres.resolve(track, results)
+            if not value:
+                continue
+            resolved = (value, "genre-vote", score)
+        else:
+            resolved = _resolve(field, results)
         if not resolved:
             continue
         new_value, source, score = resolved

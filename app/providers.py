@@ -374,14 +374,33 @@ def discogs(track: dict) -> dict | None:
     if not results:
         _cache(key, {})
         return None
-    top = results[0]
+
+    # Discogs titles read "Artist - Album", and a search for a common name
+    # returns plenty of records by other people. Taking results[0] on faith
+    # is how a metal band ends up tagged Jazz.
+    best, best_score = None, 0.0
+    for r in results:
+        full = r.get("title") or ""
+        parts = full.split(" - ", 1)
+        cand_artist = parts[0] if len(parts) > 1 else ""
+        cand_album = parts[-1]
+        score = 0.55 * _similar(album or title, cand_album)
+        score += 0.45 * _similar(artist, cand_artist) if artist else 0.0
+        if score > best_score:
+            best, best_score = r, score
+
+    if not best or best_score < 0.6:
+        _cache(key, {})
+        return None
+
+    top = best
     genres = (top.get("style") or []) + (top.get("genre") or [])
     result = {
         "album": (top.get("title") or "").split(" - ")[-1] or None,
         "year": str(top.get("year")) if top.get("year") else None,
         "genre": "; ".join(dict.fromkeys(genres[:3])) or None,
         "art_url": top.get("cover_image"),
-        "score": 0.7,
+        "score": round(min(best_score, 0.95), 3),
         "source": "discogs",
     }
     result = {k: v for k, v in result.items() if v not in (None, "")}
@@ -416,7 +435,10 @@ def lastfm(track: dict) -> dict | None:
         raise
 
     info = data.get("track") or {}
-    tags = [t["name"].title() for t in (info.get("toptags", {}).get("tag") or [])[:3]]
+    from .genres import clean_tags
+    # Take a wide slice and filter, rather than trusting the top three —
+    # "seen live" outranks the actual genre on plenty of bands.
+    tags = clean_tags([t["name"] for t in (info.get("toptags", {}).get("tag") or [])[:15]])
     result = {
         "title": info.get("name"),
         "artist": (info.get("artist") or {}).get("name"),
