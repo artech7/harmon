@@ -12,11 +12,30 @@ from collections import defaultdict
 
 from . import db
 from .config import get as get_config
+from .scanner import title_qualifier
 
 CODEC_RANK = {
     "flac": 100, "alac": 95, "wav": 90, "aiff": 88, "ape": 85, "wavpack": 84,
     "opus": 60, "aac": 55, "vorbis": 50, "mp3": 45, "wma": 30,
 }
+
+
+def _same_recording(a: dict, b: dict) -> bool:
+    """Could these two files hold the same recording?
+
+    Titles are compared with their qualifiers stripped, which is what lets
+    "Low Tide" match "Low Tide (Remastered)". But that same stripping makes
+    "Idol (feat. Tech N9ne)" and "Idol (feat. KURT92)" identical, and they are
+    three-and-a-bit minutes of different music.
+
+    So: if both titles carry a qualifier and the qualifiers disagree, these are
+    different recordings. If only one has a qualifier, it is probably the same
+    recording tagged more carefully, and they can still pair.
+    """
+    qa, qb = title_qualifier(a.get("title")), title_qualifier(b.get("title"))
+    if qa and qb and qa != qb:
+        return False
+    return True
 
 
 def _bucket(track: dict) -> tuple:
@@ -144,9 +163,12 @@ def find() -> dict:
         clusters: list[list[dict]] = []
         for t in sorted(group, key=lambda x: x["duration"] or 0):
             for c in clusters:
-                if abs((t["duration"] or 0) - (c[0]["duration"] or 0)) <= tolerance:
-                    c.append(t)
-                    break
+                if abs((t["duration"] or 0) - (c[0]["duration"] or 0)) > tolerance:
+                    continue
+                if not _same_recording(t, c[0]):
+                    continue
+                c.append(t)
+                break
             else:
                 clusters.append([t])
 

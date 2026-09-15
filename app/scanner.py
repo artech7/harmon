@@ -32,6 +32,31 @@ _SPACES = re.compile(r"\s+")
 _COPY = re.compile(r"(\s+\(\d+\)|\s+-?\s*copy|\s+duplicate)\s*$", re.I)
 
 
+# Everything normalize() throws away, kept so duplicate detection can tell
+# "Idol (feat. Tech N9ne)" from "Idol (feat. KURT92)". Those are different
+# recordings; dropping the qualifier makes them look like the same one.
+_QUALIFIER = re.compile(r"[\(\[]([^)\]]+)[\)\]]|\s[-–]\s(.+)$")
+
+
+def title_qualifier(text: str | None) -> str:
+    """What distinguishes two tracks whose base titles match.
+
+    Featured artists, remix credits, edit names. Returned normalized and
+    sorted so the comparison does not depend on ordering or punctuation.
+    """
+    if not text:
+        return ""
+    parts = []
+    for match in _QUALIFIER.finditer(str(text)):
+        piece = match.group(1) or match.group(2) or ""
+        piece = re.sub(r"^\s*(feat|ft|featuring|with)\.?\s*", "", piece, flags=re.I)
+        piece = _NOISE.sub(" ", unicodedata.normalize("NFKD", piece).lower())
+        piece = _SPACES.sub(" ", piece).strip()
+        if piece:
+            parts.append(piece)
+    return "|".join(sorted(parts))
+
+
 def normalize(text: str | None) -> str:
     """Collapse a title/artist down to something two files can be compared on."""
     if not text:

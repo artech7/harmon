@@ -244,6 +244,22 @@ check("different discs never share a bucket",
       dupes._bucket({"album": "Box", "album_key": "x|box", "disc_no": 1, "folder": "/a"})
       != dupes._bucket({"album": "Box", "album_key": "x|box", "disc_no": 2, "folder": "/a"}),
       True)
+from app.scanner import title_qualifier
+check("a featured artist is kept as a qualifier",
+      title_qualifier("Idol (feat. Tech N9ne)"), "tech n9ne")
+check("a plain title has no qualifier", title_qualifier("Idol"), "")
+check("different guests are different recordings",
+      dupes._same_recording({"title": "Idol (feat. Tech N9ne)"},
+                            {"title": "Idol (feat. KURT92)"}), False)
+check("a remaster still pairs with the plain title",
+      dupes._same_recording({"title": "Low Tide (Remastered)"},
+                            {"title": "Low Tide"}), True)
+check("two identical titles pair",
+      dupes._same_recording({"title": "Low Tide"}, {"title": "Low Tide"}), True)
+check("a radio edit does not pair with an acoustic take",
+      dupes._same_recording({"title": "Song - Radio Edit"},
+                            {"title": "Song (Acoustic Version)"}), False)
+
 check("the folder leads the bucket",
       dupes._bucket({"album": "Box", "album_key": "x|box", "folder": "/a"})[0], "/a")
 # Three Coldplay releases all mistagged "Greatest Songs" must stay separate.

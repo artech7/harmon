@@ -38,6 +38,12 @@ The album tag alone is not trusted, because trusting it causes real damage:
   byte-identical check, which verifies contents in full.
 - **Different discs never group.** Disc 2's "Intro" is not a duplicate of
   disc 1's "Intro".
+- **Title qualifiers are compared, not discarded.** Stripping `(feat. …)` is
+  what lets "Low Tide" match "Low Tide (Remastered)", but it also makes
+  "Idol (feat. Tech N9ne)" and "Idol (feat. KURT92)" look identical when they
+  are different recordings. If two titles both carry a qualifier and the
+  qualifiers disagree, they are not duplicates. If only one has a qualifier,
+  they can still pair.
 - **Byte-identical copies are read in full and compared before deletion.**
   Grouping uses a cheap fingerprint (size plus head and tail); that is fine
   for finding candidates and not good enough to delete on. If the full
