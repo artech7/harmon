@@ -218,6 +218,14 @@ docker exec harmon python3 -c "import socket; print(socket.gethostbyname('musicb
 An address means DNS works. An error means it does not, and the `dns:` entries
 are either missing or pointing somewhere unreachable from the NAS.
 
+## Caching
+
+The shell is served with `no-store` and the stylesheet and script are requested
+with a version derived from their modification times. A browser therefore
+cannot hold a stale `app.js` alongside a fresh `index.html`, which is the
+mismatch that produces an error on every status poll. No hard refresh needed
+after a deploy.
+
 ## Notes
 
 - The watcher polls on a timer rather than using filesystem events, which is

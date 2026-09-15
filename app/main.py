@@ -410,9 +410,32 @@ def track_art(track_id: int):
 
 # --- web ------------------------------------------------------------------
 
+def _asset_version() -> str:
+    """Changes whenever the front end does, so the browser cannot serve a
+    stale app.js alongside a fresh index.html — the mismatch that produces
+    errors on every poll."""
+    newest = 0.0
+    for name in ("app.js", "app.css", "index.html"):
+        try:
+            newest = max(newest, os.path.getmtime(os.path.join(WEB_DIR, name)))
+        except OSError:
+            pass
+    return str(int(newest))
+
+
 @api.get("/")
 def index():
-    return FileResponse(os.path.join(WEB_DIR, "index.html"))
+    with open(os.path.join(WEB_DIR, "index.html")) as f:
+        html = f.read()
+    version = _asset_version()
+    html = (html.replace('href="/app.css"', f'href="/app.css?v={version}"')
+                .replace('src="/app.js"', f'src="/app.js?v={version}"'))
+    return Response(
+        content=html, media_type="text/html",
+        # The shell itself must never be cached, or the versioned asset links
+        # inside it never reach the browser.
+        headers={"Cache-Control": "no-store, must-revalidate"},
+    )
 
 
 api.mount("/", StaticFiles(directory=WEB_DIR, html=True), name="web")

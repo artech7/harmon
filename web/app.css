@@ -108,6 +108,16 @@
 
 *{box-sizing:border-box}
 html,body{margin:0;height:100%}
+html{-webkit-text-size-adjust:100%}
+
+/* Respect the notch and the home indicator. */
+@supports (padding:max(0px)){
+  body{
+    padding-left:max(18px, env(safe-area-inset-left));
+    padding-right:max(18px, env(safe-area-inset-right));
+    padding-bottom:max(60px, env(safe-area-inset-bottom));
+  }
+}
 
 body{
   background:var(--ink);
@@ -528,8 +538,96 @@ input[type=checkbox],input[type=radio]{accent-color:var(--signal);width:16px;hei
 .toast.bad{box-shadow:inset 0 0 0 1px color-mix(in srgb, var(--fault) 45%, transparent),
            0 10px 30px -12px rgba(0,0,0,.6)}
 
-@media (max-width:700px){
-  .ghead{grid-template-columns:1fr}
-  .row{grid-template-columns:1fr !important}
-  .racts{justify-content:flex-start}
+/* --- narrow screens ----------------------------------------------------
+
+   Most rows here are grids whose columns are set inline from JavaScript, so
+   the overrides below need !important to reach them. Everything collapses to
+   a single column and the actions move underneath, which is the only honest
+   layout once a row has five columns and 360px to put them in. */
+
+@media (max-width:760px){
+  body{padding:14px 12px 48px}
+
+  /* Blur is expensive to composite on a phone, and a large radius over a
+     scrolling list is where it shows. Keep the look, halve the cost. */
+  .glass,button,.toast{
+    backdrop-filter:blur(14px) saturate(150%);
+    -webkit-backdrop-filter:blur(14px) saturate(150%);
+  }
+
+  header{gap:8px 10px}
+  h1{font-size:19px}
+  .job{
+    margin-left:0;
+    order:10;
+    width:100%;
+    flex-wrap:wrap;
+    padding-top:4px;
+  }
+  .job-detail{max-width:100%;white-space:normal;line-height:1.5}
+  .themepick{margin-left:auto}
+  .themepick button{width:26px;height:26px}   /* 19px is not a tap target */
+
+  .toptabs{
+    margin:16px -12px 20px;
+    padding:0 12px;
+    scroll-snap-type:x proximity;
+    -webkit-overflow-scrolling:touch;
+  }
+  .toptab{padding:12px 15px;scroll-snap-align:start}
+
+  /* 44px minimum, which is what a fingertip actually needs. */
+  button{padding:12px 16px;min-height:44px}
+  button.sm{padding:9px 13px;min-height:38px}
+  .toptab{min-height:auto}
+  .crumbs button{min-height:34px;padding:6px 10px}
+  .themepick button{min-height:0;padding:0}
+
+  /* 16px or the browser zooms the whole page when a field is focused. */
+  input[type=text],input[type=password],input[type=number],input[type=time],
+  select,textarea{font-size:16px;padding:11px 12px}
+
+  .card{padding:16px 14px}
+  .stat{padding:14px}
+  .stat .v{font-size:22px}
+  .stats{grid-template-columns:repeat(auto-fit,minmax(132px,1fr));gap:10px}
+  .grid2{grid-template-columns:1fr}
+  .codecs{grid-template-columns:1fr}
+
+  .row,.ghead,.copy,.entry{grid-template-columns:1fr !important;gap:10px}
+  .racts,.row-actions{justify-content:flex-start;flex-wrap:wrap}
+  .entry{padding:12px 6px}
+  .entry .ico{display:none}
+  .entry .nm{white-space:normal}
+
+  /* Chips sat in their own grid cells; once stacked they read better as a row. */
+  .ghead > .chip,.row > .chip,.copy > .chip{justify-self:start}
+
+  .spectrum{height:38px}
+  .spectrum span{font-size:9.5px}
+
+  .toasts{left:12px;right:12px;bottom:12px}
+  .toast{max-width:none}
+
+  .log{max-height:none}
+  .log div{flex-direction:column;gap:2px}
+  .log time{font-size:10.5px}
+
+  .diff{gap:6px}
+  .rpath{font-size:10px}
+}
+
+@media (max-width:420px){
+  .stats{grid-template-columns:1fr 1fr}
+  .stat .v{font-size:20px}
+  h1{font-size:18px}
+  .tag{font-size:10px}
+  .toptab{padding:11px 13px;font-size:13.5px}
+}
+
+/* Phones in landscape and small tablets: two columns still work, but the
+   five-column rows do not. */
+@media (min-width:761px) and (max-width:900px){
+  .row,.ghead{grid-template-columns:1fr auto !important;gap:10px}
+  .racts{grid-column:1 / -1;justify-content:flex-start}
 }
