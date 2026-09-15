@@ -82,7 +82,37 @@ check("summary adds up", s2["matching"] + s2["needs_convert"] + s2["protected"],
 config.save({"target": {"codec": "opus", "bitrate": 128}})
 check("changing the target re-queues everything", transcode.stage_conversions(), 3)
 
-from app import albums, enrich, hygiene, providers
+from app import albums, browse, enrich, hygiene, providers
+
+# --- codec-only mode ------------------------------------------------------
+config.save({"target": {"codec": "aac", "bitrate": 256, "bitrate_mode": "codec_only"}})
+check("codec-only encodes at the codec ceiling", transcode.effective_bitrate(), 320)
+check("an AAC file at any bitrate is left alone",
+      transcode.assess({"codec": "aac", "bitrate": 96, "lossless": 0})["action"], "keep")
+check("a different codec still converts",
+      transcode.assess({"codec": "mp3", "bitrate": 320, "lossless": 0})["action"], "convert")
+check("lossless is still protected",
+      transcode.assess({"codec": "flac", "bitrate": 900, "lossless": 1})["action"], "keep")
+check("the ceiling reaches the encoder",
+      "-b:a" in transcode.build_command("/a.mp3", "/b.m4a")
+      and "320k" in transcode.build_command("/a.mp3", "/b.m4a"), True)
+check("the mode is part of the signature",
+      "codec_only" in transcode.target_signature(), True)
+
+config.save({"target": {"bitrate_mode": "fixed"}})
+check("fixed mode still re-encodes an over-target file",
+      transcode.assess({"codec": "aac", "bitrate": 320, "lossless": 0})["action"], "convert")
+
+# --- folder browsing ------------------------------------------------------
+listing = browse.listing(LIB)
+check("browsing finds the album folders", len(listing["folders"]) > 0, True)
+check("breadcrumbs lead back to the root", listing["crumbs"][0]["path"].startswith("/"), True)
+try:
+    browse.listing("/etc")
+    check("browsing outside the library is refused", False, True)
+except ValueError:
+    check("browsing outside the library is refused", True, True)
+
 
 # --- album batching -------------------------------------------------------
 db.execute("UPDATE tracks SET enriched_at=NULL, album='Nightfall', "

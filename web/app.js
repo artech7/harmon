@@ -188,6 +188,7 @@ function buildThemePicker() {
 const TABS = {
   overview: viewOverview,
   duplicates: viewDuplicates,
+  folders: viewFolders,
   metadata: viewMetadata,
   format: viewFormat,
   review: viewReview,
@@ -197,6 +198,7 @@ const TABS = {
 const SUBTITLE = {
   overview: 'music library',
   duplicates: 'copies of the same song',
+  folders: 'browse the library as it sits on disk',
   metadata: 'artists, albums, genres, artwork',
   format: 'codec and bitrate',
   review: 'nothing is written until you approve it',
@@ -490,6 +492,95 @@ async function fillGroup(groupId, body) {
   }
 }
 
+/* --- folders ----------------------------------------------------------- */
+
+let folderPath = null;
+
+/* Jump to the folder a track lives in, from anywhere in the app. */
+async function openFolderFor(trackId) {
+  const r = await api('/browse/for-track/' + trackId);
+  folderPath = r.path;
+  switchTab('folders');
+}
+
+function openFolder(path) {
+  folderPath = path;
+  if (state.tab === 'folders') render(); else switchTab('folders');
+}
+
+async function viewFolders() {
+  if (!folderPath) {
+    const { roots } = await api('/browse');
+    if (!roots.length) {
+      return card('No folders yet',
+        'Add a music folder under Settings and run a scan, then you can browse it here.');
+    }
+    if (roots.length === 1) { folderPath = roots[0].path; return viewFolders(); }
+    return card('Your libraries', 'Pick one to look inside.',
+      el('div', { class: 'rows' }, roots.map((r) =>
+        el('div', { class: 'entry', onclick: () => openFolder(r.path) },
+          el('span', { class: 'ico' }, '▸'),
+          el('div', {}, el('div', { class: 'nm' }, r.name),
+             el('div', { class: 'sub' }, r.path)),
+          chip(`${num(r.tracks)} tracks`),
+          el('span', { class: 'sub' }, bytes(r.bytes))))));
+  }
+
+  let r;
+  try {
+    r = await api('/browse?path=' + encodeURIComponent(folderPath));
+  } catch (err) {
+    folderPath = null;
+    return card('That folder is no longer there', err.message,
+      el('button', { onclick: () => { folderPath = null; render(); } }, 'Back to the top'));
+  }
+
+  const crumbs = el('div', { class: 'crumbs' });
+  r.crumbs.forEach((c, i) => {
+    if (i) crumbs.append(el('span', {}, '/'));
+    crumbs.append(el('button', { class: 'sm', onclick: () => openFolder(c.path) }, c.name));
+  });
+
+  const rows = el('div', { class: 'rows' });
+
+  r.folders.forEach((f) => rows.append(
+    el('div', { class: 'entry', onclick: () => openFolder(f.path) },
+      el('span', { class: 'ico' }, '▸'),
+      el('div', {}, el('div', { class: 'nm' }, f.name)),
+      chip(`${num(f.tracks)} tracks`),
+      el('span', { class: 'sub' }, bytes(f.bytes)))));
+
+  r.tracks.forEach((t) => rows.append(
+    el('div', { class: 'entry file' },
+      el('span', { class: 'ico' }, '♪'),
+      el('div', {},
+        el('div', { class: 'nm' }, t.title || t.name),
+        el('div', { class: 'sub' },
+          [t.name,
+           [t.artist, t.album].filter(Boolean).join(' — '),
+           t.year, t.genre].filter(Boolean).join('  ·  '))),
+      el('span', { class: 'sub' },
+        `${(t.codec || '?').toUpperCase()} ${t.bitrate || '?'}k · ${bytes(t.size)}`),
+      el('div', { style: 'display:flex;gap:6px' },
+        t.has_art ? null : chip('no art', 'hot'),
+        t.pending ? chip(`${t.pending} staged`, 'wait') : null))));
+
+  if (!r.folders.length && !r.tracks.length) {
+    rows.append(el('div', { class: 'empty' }, 'Nothing indexed in this folder.'));
+  }
+
+  return card(null, null, crumbs,
+    el('div', { class: 'bar' },
+      r.parent
+        ? el('button', { class: 'sm', onclick: () => openFolder(r.parent) }, 'Up one level')
+        : null,
+      chip(`${num(r.total_tracks)} tracks here and below`),
+      chip(bytes(r.total_bytes)),
+      el('div', { class: 'push' }),
+      el('span', { class: 'sub' }, r.path)),
+    rows);
+}
+
 /* --- metadata ---------------------------------------------------------- */
 
 let onlyProblems = true;
@@ -644,9 +735,10 @@ async function viewFormat() {
     render();
   };
 
+  const codecOnly = target.bitrate_mode === 'codec_only';
   const controls = el('div', { class: 'grid2', style: 'margin-top:18px' });
 
-  if (spec.bitrates.length) {
+  if (spec.bitrates.length && !codecOnly) {
     controls.append(el('div', { class: 'field' },
       el('label', {}, 'Bitrate'),
       el('select', { onchange: (e) => save({ bitrate: Number(e.target.value) }) },
@@ -678,6 +770,23 @@ async function viewFormat() {
         class: 'codec' + (key === target.codec ? ' on' : ''),
         onclick: () => save({ codec: key, bitrate: c.bitrates.at(-2) || target.bitrate }),
       }, el('b', {}, c.label), el('small', {}, c.blurb)))),
+    spec.lossless ? null : el('div', { style: 'margin-top:20px' },
+      el('h2', {}, 'What counts as needing conversion'),
+      el('div', { class: 'codecs' },
+        el('button', {
+          class: 'codec' + (codecOnly ? '' : ' on'),
+          onclick: () => save({ bitrate_mode: 'fixed' }),
+        }, el('b', {}, 'Codec and bitrate'),
+           el('small', {}, `Everything ends up ${spec.label} at one bitrate you choose. Files already at it are left alone; files above it are re-encoded down.`)),
+        el('button', {
+          class: 'codec' + (codecOnly ? ' on' : ''),
+          onclick: () => save({ bitrate_mode: 'codec_only' }),
+        }, el('b', {}, 'Codec only'),
+           el('small', {}, `Anything already ${spec.label} is left exactly as it is, whatever its bitrate. Everything else is converted at ${spec.best_bitrate} kbps, the highest this codec goes.`))),
+      codecOnly
+        ? el('div', { class: 'rmeta', style: 'margin-top:12px;white-space:normal' },
+            `Converting at ${spec.best_bitrate} kbps means a 128 kbps source produces a much larger file without sounding better — the bits come from the encoder, not the music. That is the trade for touching each file once and never revisiting bitrate. You can switch to the other mode later and re-run.`)
+        : null),
     controls,
     swRow('Convert lossless files too',
       'Off by default, so your FLAC and ALAC rips are never turned lossy by accident.',
@@ -786,6 +895,46 @@ function reviewModeBar(counts) {
     }, `Apply ${num(counts.approved || 0)} approved`));
 }
 
+/* The samples answer "what does this look like". This answers "show me every
+   one", because approving 900 changes sight-unseen is not a review. */
+async function showAllInGroup(g, host) {
+  host.style.display = 'flex';
+  host.innerHTML = '';
+  host.append(el('div', { class: 'empty' }, 'Loading…'));
+
+  const query = new URLSearchParams({ kind: g.kind, band: g.band, limit: '300' });
+  if (g.field) query.set('field', g.field);
+  if (g.source) query.set('source', g.source);
+  const r = await api('/changes/group-items?' + query);
+
+  host.innerHTML = '';
+  host.append(el('div', { class: 'bar', style: 'margin:0 0 6px' },
+    chip(`Showing ${num(r.items.length)} of ${num(r.total)}`),
+    el('div', { class: 'push' }),
+    el('button', {
+      class: 'sm', onclick: () => { host.innerHTML = ''; host.style.display = 'none'; },
+    }, 'Close')));
+
+  r.items.forEach((it) => host.append(
+    el('div', { class: 'copy', style: 'grid-template-columns:1fr auto auto' },
+      el('div', {},
+        el('div', { class: 'rname' }, it.title || basename(it.path)),
+        el('div', { class: 'rmeta' }, [it.artist, it.album].filter(Boolean).join(' — ')),
+        el('div', { class: 'diff' },
+          it.old_value ? el('s', {}, it.old_value) : el('span', { class: 'rmeta' }, '(empty)'),
+          el('em', {}, g.kind === 'art' ? 'cover image' : it.new_value))),
+      el('button', {
+        class: 'jump', title: it.folder,
+        onclick: () => openFolderFor(it.track_id),
+      }, 'Show folder'),
+      el('span', { class: 'chip mono' }, `${Math.round(it.confidence * 100)}%`))));
+
+  if (r.total > r.items.length) {
+    host.append(el('div', { class: 'rmeta', style: 'padding:8px 2px' },
+      `${num(r.total - r.items.length)} more not shown. Approving the group covers all ${num(r.total)}.`));
+  }
+}
+
 async function reviewGrouped() {
   const { counts, groups } = await api('/changes/grouped');
 
@@ -823,17 +972,23 @@ async function reviewGrouped() {
           samples.style.display = shown ? 'flex' : 'none';
         },
       }, 'Examples'),
+      el('button', {
+        class: 'sm', onclick: () => showAllInGroup(g, samples),
+      }, `View all ${num(g.n)}`),
       el('button', { class: 'go sm', onclick: () => decide('approved') }, `Approve ${num(g.n)}`),
       el('button', { class: 'sm', onclick: () => decide('rejected') }, 'Reject'));
 
     g.samples.forEach((sm) => samples.append(
-      el('div', { class: 'copy', style: 'grid-template-columns:1fr auto' },
+      el('div', { class: 'copy', style: 'grid-template-columns:1fr auto auto' },
         el('div', {},
           el('div', { class: 'rname' }, sm.title || basename(sm.path)),
           el('div', { class: 'rmeta' }, [sm.artist, sm.album].filter(Boolean).join(' — ')),
           el('div', { class: 'diff' },
             sm.old_value ? el('s', {}, sm.old_value) : el('span', { class: 'rmeta' }, '(empty)'),
             el('em', {}, g.kind === 'art' ? 'cover image' : sm.new_value))),
+        el('button', {
+          class: 'jump', onclick: () => openFolderFor(sm.track_id),
+        }, 'Show folder'),
         el('span', { class: 'chip mono' }, `${Math.round(sm.confidence * 100)}%`))));
 
     return el('div', {}, head, samples);

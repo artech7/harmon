@@ -162,6 +162,7 @@ def index_file(path: str, library_id: int | None = None, force: bool = False) ->
         return "skipped"
 
     meta["path"] = path
+    meta["folder"] = os.path.dirname(path)
     meta["library_id"] = library_id
     meta["size"] = st.st_size
     meta["mtime"] = st.st_mtime

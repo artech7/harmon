@@ -37,6 +37,7 @@ CODECS: dict[str, dict[str, Any]] = {
         "container": "m4a",
         "lossless": False,
         "bitrates": [128, 160, 192, 256, 320],
+        "best_bitrate": 320,
     },
     "mp3": {
         "label": "MP3",
@@ -44,6 +45,7 @@ CODECS: dict[str, dict[str, Any]] = {
         "container": "mp3",
         "lossless": False,
         "bitrates": [128, 192, 256, 320],
+        "best_bitrate": 320,
     },
     "opus": {
         "label": "Opus",
@@ -51,6 +53,7 @@ CODECS: dict[str, dict[str, Any]] = {
         "container": "opus",
         "lossless": False,
         "bitrates": [96, 128, 160, 192, 256],
+        "best_bitrate": 256,
     },
 }
 
@@ -75,6 +78,9 @@ DEFAULTS: dict[str, Any] = {
     },
     "target": {
         "codec": "aac",
+        # "fixed"      — convert anything that is not at the chosen bitrate
+        # "codec_only" — only the codec matters; encode at the codec's ceiling
+        "bitrate_mode": "fixed",
         "bitrate": 256,
         "quality": "5",
         "samplerate": 0,          # 0 = keep source

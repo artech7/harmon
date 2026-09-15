@@ -101,9 +101,30 @@ Pick a codec and bitrate on the Format screen. Harmon then:
 4. Stamps the file with the target it was converted to, so it is never
    re-encoded on the next pass. Changing the target clears this and re-queues.
 
+Two modes, on the Format screen:
+
+- **Codec and bitrate** — everything ends up at one codec and one bitrate.
+  Files above the target are re-encoded down.
+- **Codec only** — anything already in the target codec is left exactly as it
+  is, whatever its bitrate. Everything else converts at the codec's ceiling
+  (320 kbps for AAC and MP3, 256 for Opus). Each file is touched once and
+  bitrate never triggers a conversion again.
+
+Codec-only means a 128 kbps source becomes a much larger file without sounding
+better — the extra bits come from the encoder, not the music. That is the trade
+for never revisiting bitrate. Switching modes later re-queues accordingly.
+
 Guards that are on by default: lossless files are not converted to a lossy
 format, and files already below the target bitrate are left alone rather than
 being re-encoded upward.
+
+## Browsing by folder
+
+The Folders tab shows the library the way it sits on disk — built from the
+index, not by walking the share, so it is quick on a NAS. Each file shows its
+codec, bitrate, size and whether it has changes staged. Review's grouped view
+links straight to a track's folder, so you can see what you are working on
+before approving anything.
 
 ---
 

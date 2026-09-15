@@ -10,7 +10,7 @@ from fastapi import Body, FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from . import albums, changes, config, db, dupes, enrich, hygiene, netcheck, providers, scanner, transcode, worker
+from . import albums, browse, changes, config, db, dupes, enrich, hygiene, netcheck, providers, scanner, transcode, worker
 
 WEB_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "web")
 
@@ -249,6 +249,49 @@ def stage_all_dupes():
 def change_list(status: str = "pending", kind: str | None = None,
                 limit: int = 300, offset: int = 0):
     return {"counts": changes.counts(), "items": changes.listing(status, kind, limit, offset)}
+
+
+@api.get("/api/browse")
+def browse_folder(path: str | None = None):
+    if not path:
+        return {"roots": browse.roots()}
+    try:
+        return browse.listing(path)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+
+
+@api.get("/api/browse/for-track/{track_id}")
+def browse_for_track(track_id: int):
+    folder = browse.folder_for_track(track_id)
+    if not folder:
+        raise HTTPException(404, "Track not found")
+    return browse.listing(folder)
+
+
+@api.get("/api/changes/group-items")
+def group_items(kind: str, band: str, field: str | None = None, source: str | None = None,
+                status: str = "pending", limit: int = 200, offset: int = 0):
+    """Every change in one group, not just the samples."""
+    bands = {"high": (0.9, 1.01), "good": (0.75, 0.9), "low": (-0.01, 0.75)}
+    lo, hi = bands.get(band, (-0.01, 1.01))
+    rows = db.query(
+        "SELECT c.id, c.old_value, c.new_value, c.confidence, "
+        "       t.id AS track_id, t.title, t.artist, t.album, t.path, t.folder "
+        "FROM changes c JOIN tracks t ON t.id = c.track_id "
+        "WHERE c.status=? AND c.kind=? AND c.source IS ? "
+        "  AND (c.field IS ? OR (c.field IS NULL AND ? IS NULL)) "
+        "  AND c.confidence >= ? AND c.confidence < ? "
+        "ORDER BY t.artist, t.album, t.title LIMIT ? OFFSET ?",
+        (status, kind, source, field, field, lo, hi, limit, offset),
+    )
+    total = db.one(
+        "SELECT COUNT(*) AS n FROM changes WHERE status=? AND kind=? AND source IS ? "
+        "AND (field IS ? OR (field IS NULL AND ? IS NULL)) "
+        "AND confidence >= ? AND confidence < ?",
+        (status, kind, source, field, field, lo, hi),
+    )["n"]
+    return {"total": total, "offset": offset, "items": db.rows_to_dicts(rows)}
 
 
 @api.get("/api/changes/grouped")

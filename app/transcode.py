@@ -33,19 +33,32 @@ def probe(path: str) -> dict:
     return json.loads(out.stdout)
 
 
+def effective_bitrate() -> int:
+    """The bitrate a conversion will actually use, given the current mode."""
+    cfg = get_config()["target"]
+    spec = CODECS[cfg["codec"]]
+    if spec["lossless"]:
+        return 0
+    if cfg.get("bitrate_mode") == "codec_only":
+        return int(spec.get("best_bitrate") or cfg["bitrate"])
+    return int(cfg["bitrate"] or 0)
+
+
 def target_signature() -> str:
     """Identifies the current target so a file is never converted to it twice."""
     cfg = get_config()["target"]
     spec = CODECS[cfg["codec"]]
-    setting = cfg.get("quality") if spec["lossless"] else cfg.get("bitrate")
-    return f"{cfg['codec']}:{setting}:{cfg.get('samplerate') or 'src'}"
+    setting = cfg.get("quality") if spec["lossless"] else effective_bitrate()
+    mode = cfg.get("bitrate_mode", "fixed")
+    return f"{cfg['codec']}:{mode}:{setting}:{cfg.get('samplerate') or 'src'}"
 
 
 def assess(track: dict) -> dict:
     """Decide whether a track already matches the target format, and say why."""
     cfg = get_config()["target"]
     target_codec = cfg["codec"]
-    target_bitrate = int(cfg["bitrate"] or 0)
+    target_bitrate = effective_bitrate()
+    codec_only = cfg.get("bitrate_mode") == "codec_only"
     spec = CODECS[target_codec]
     codec = (track.get("codec") or "").lower()
     bitrate = int(track.get("bitrate") or 0)
@@ -64,6 +77,11 @@ def assess(track: dict) -> dict:
     if codec == target_codec:
         if spec["lossless"]:
             return {"action": "keep", "state": "match", "reason": f"Already {spec['label']}"}
+        # Codec-only mode: the format is right, so there is nothing to do.
+        # Bitrate never triggers a conversion here, whatever it happens to be.
+        if codec_only:
+            return {"action": "keep", "state": "match",
+                    "reason": f"Already {spec['label']} at {bitrate or '?'} kbps"}
         low = target_bitrate * (1 - BITRATE_TOLERANCE)
         high = target_bitrate * (1 + BITRATE_TOLERANCE)
         if low <= bitrate <= high:
@@ -95,7 +113,7 @@ def build_command(src: str, dst: str) -> list[str]:
     if codec == "flac":
         cmd += ["-compression_level", str(cfg.get("quality") or 5)]
     elif not spec["lossless"]:
-        cmd += ["-b:a", f"{int(cfg['bitrate'])}k"]
+        cmd += ["-b:a", f"{effective_bitrate()}k"]
     if cfg.get("samplerate"):
         cmd += ["-ar", str(cfg["samplerate"])]
     if codec in ("aac", "alac"):

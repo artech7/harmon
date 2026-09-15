@@ -81,8 +81,8 @@ def grouped(status: str = "pending") -> list[dict]:
     for r in rows:
         g = dict(r)
         g["samples"] = db.rows_to_dicts(db.query(
-            "SELECT c.id, c.old_value, c.new_value, c.confidence, "
-            "       t.title, t.artist, t.album, t.path "
+            "SELECT c.id, c.track_id, c.old_value, c.new_value, c.confidence, "
+            "       t.title, t.artist, t.album, t.path, t.folder "
             "FROM changes c JOIN tracks t ON t.id = c.track_id "
             "WHERE c.status = ? AND c.kind = ? AND c.source IS ? "
             "  AND (c.field IS ? OR (c.field IS NULL AND ? IS NULL)) "

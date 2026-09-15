@@ -58,6 +58,7 @@ CREATE TABLE IF NOT EXISTS tracks (
     enriched_at  TEXT,
     standardized INTEGER DEFAULT 0,
     std_signature TEXT,
+    folder       TEXT,
     missing      INTEGER DEFAULT 0,
     scanned_at   TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -159,9 +160,18 @@ def init() -> None:
     conn.executescript(SCHEMA)
     # Lightweight forward migrations for stores created by an earlier version.
     have = {r["name"] for r in conn.execute("PRAGMA table_info(tracks)")}
-    for column, ddl in (("std_signature", "TEXT"),):
+    for column, ddl in (("std_signature", "TEXT"), ("folder", "TEXT")):
         if column not in have:
             conn.execute(f"ALTER TABLE tracks ADD COLUMN {column} {ddl}")
+            if column == "folder":
+                # Backfill from paths already indexed, so browsing works without
+                # forcing a rescan. os.path.dirname beats doing this in SQL.
+                rows = conn.execute("SELECT id, path FROM tracks").fetchall()
+                conn.executemany(
+                    "UPDATE tracks SET folder=? WHERE id=?",
+                    [(os.path.dirname(r["path"]), r["id"]) for r in rows],
+                )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_tracks_folder ON tracks(folder)")
     conn.commit()
 
 
