@@ -122,6 +122,34 @@ check("the leftover is handed to the per-track path",
       {r["id"] for r in db.query("SELECT id FROM tracks WHERE enriched_at IS NULL AND missing=0")},
       True)
 
+# --- rate limiting and the circuit breaker --------------------------------
+providers.revive_all()
+providers._mb_backoff = 30.0
+for _ in range(14):
+    providers._mb_backoff = 0.0 if providers._mb_backoff < 0.3 else providers._mb_backoff * 0.7
+check("backoff recovers from the cap in ~14 good requests", providers._mb_backoff, 0.0)
+
+# The breaker needs more albums than its strike limit to be exercised at all.
+for i in range(20):
+    db.execute("INSERT INTO tracks(path,title,album,album_key,missing) VALUES(?,?,?,?,0)",
+               (f"/synthetic/{i}.mp3", f"S{i}", f"Filler {i}", f"filler|filler {i}"))
+
+providers.revive_all()
+tries = {"n": 0}
+def _limited(artist, album, count):
+    tries["n"] += 1
+    raise providers.RateLimited("rate limited")
+providers.mb_find_release = _limited
+db.execute("UPDATE tracks SET enriched_at=NULL WHERE missing=0")
+res_rl = albums.run()
+check("the album pass stops instead of grinding", res_rl["stopped_early"], True)
+check("throttling benches the source", providers.is_benched("musicbrainz"), True)
+check("rate limits get more rope than hard errors",
+      tries["n"], providers.STRIKES_BEFORE_BENCH_RATE_LIMIT)
+
+providers.revive_all()
+check("reviving clears the bench", providers.is_benched("musicbrainz"), False)
+
 check("fingerprinting is wired in", "acoustid" in providers.LOOKUPS, True)
 check("acoustid stays quiet without a key",
       providers.acoustid({"path": "/nonexistent.mp3"}), None)

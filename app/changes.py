@@ -55,6 +55,64 @@ def listing(status: str = "pending", kind: str | None = None,
     return db.rows_to_dicts(db.query(sql, args + (limit, offset)))
 
 
+def grouped(status: str = "pending") -> list[dict]:
+    """Collapse staged changes into decisions a person can actually make.
+
+    Thirteen thousand rows is not a review, it is a wall. But those rows are
+    only a few dozen *kinds* of change — "add a year, from MusicBrainz, at 95%
+    confidence" repeated a thousand times. Deciding about the kind is a real
+    review; scrolling the rows is not.
+    """
+    rows = db.query(
+        "SELECT kind, field, source, "
+        "  CASE WHEN confidence >= 0.9 THEN 'high' "
+        "       WHEN confidence >= 0.75 THEN 'good' "
+        "       ELSE 'low' END AS band, "
+        "  COUNT(*) AS n, "
+        "  MIN(confidence) AS lo, MAX(confidence) AS hi, "
+        "  SUM(CASE WHEN old_value IS NULL OR old_value = '' THEN 1 ELSE 0 END) AS filling_blanks "
+        "FROM changes WHERE status = ? "
+        "GROUP BY kind, field, source, band "
+        "ORDER BY n DESC",
+        (status,),
+    )
+
+    out = []
+    for r in rows:
+        g = dict(r)
+        g["samples"] = db.rows_to_dicts(db.query(
+            "SELECT c.id, c.old_value, c.new_value, c.confidence, "
+            "       t.title, t.artist, t.album, t.path "
+            "FROM changes c JOIN tracks t ON t.id = c.track_id "
+            "WHERE c.status = ? AND c.kind = ? AND c.source IS ? "
+            "  AND (c.field IS ? OR (c.field IS NULL AND ? IS NULL)) "
+            "  AND CASE WHEN c.confidence >= 0.9 THEN 'high' "
+            "           WHEN c.confidence >= 0.75 THEN 'good' ELSE 'low' END = ? "
+            "ORDER BY c.confidence DESC LIMIT 4",
+            (status, r["kind"], r["source"], r["field"], r["field"], r["band"]),
+        ))
+        out.append(g)
+    return out
+
+
+def decide_group(kind: str, field: str | None, source: str | None, band: str,
+                 status: str) -> int:
+    """Approve or reject one whole kind of change in a single decision."""
+    bands = {"high": (0.9, 1.01), "good": (0.75, 0.9), "low": (-0.01, 0.75)}
+    lo, hi = bands.get(band, (-0.01, 1.01))
+    before = db.one("SELECT COUNT(*) AS n FROM changes WHERE status='pending' "
+                    "AND kind=? AND source IS ? AND (field IS ? OR (field IS NULL AND ? IS NULL)) "
+                    "AND confidence >= ? AND confidence < ?",
+                    (kind, source, field, field, lo, hi))["n"]
+    db.execute(
+        "UPDATE changes SET status=? WHERE status='pending' AND kind=? AND source IS ? "
+        "AND (field IS ? OR (field IS NULL AND ? IS NULL)) "
+        "AND confidence >= ? AND confidence < ?",
+        (status, kind, source, field, field, lo, hi),
+    )
+    return before
+
+
 def set_status(ids: list[int], status: str) -> int:
     if not ids:
         return 0

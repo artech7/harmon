@@ -52,8 +52,13 @@ def status():
         "JOIN tracks t ON t.id=m.track_id JOIN dupe_groups g ON g.id=m.group_id "
         "WHERE m.keeper=0 AND g.kind<>'cross_album'"
     )["n"]
+    order = config.get()["providers"]["order"]
     return {
         "shell": config.get()["shell"],
+        "sources": {
+            "benched": [n for n in order if providers.is_benched(n)],
+            "mb_backoff": providers.mb_backoff_seconds(),
+        },
         "library": dict(stats),
         "duplicates": {k: (v or 0) for k, v in dict(dupe_stats).items()},
         "reclaimable_bytes": reclaimable,
@@ -244,6 +249,30 @@ def stage_all_dupes():
 def change_list(status: str = "pending", kind: str | None = None,
                 limit: int = 300, offset: int = 0):
     return {"counts": changes.counts(), "items": changes.listing(status, kind, limit, offset)}
+
+
+@api.get("/api/changes/grouped")
+def changes_grouped(status: str = "pending"):
+    return {"counts": changes.counts(), "groups": changes.grouped(status)}
+
+
+@api.post("/api/changes/decide-group")
+def decide_group(payload: dict = Body(...)):
+    status = payload.get("status")
+    if status not in ("approved", "rejected"):
+        raise HTTPException(400, "status must be 'approved' or 'rejected'")
+    n = changes.decide_group(
+        payload["kind"], payload.get("field"), payload.get("source"),
+        payload.get("band", "all"), status,
+    )
+    return {"updated": n, "counts": changes.counts()}
+
+
+@api.post("/api/worker/stop")
+def worker_stop():
+    if not worker.request_stop():
+        raise HTTPException(409, "Nothing is running")
+    return {"stopping": True, "job": worker.status()}
 
 
 @api.post("/api/changes/decide")

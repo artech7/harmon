@@ -44,22 +44,49 @@ _mb_backoff = 0.0        # extra seconds per request, grown when throttled
 _strikes: dict[str, int] = {}
 _benched: dict[str, float] = {}
 STRIKES_BEFORE_BENCH = 3
+STRIKES_BEFORE_BENCH_RATE_LIMIT = 8
 BENCH_SECONDS = 1800
 
 
-def _note_failure(name: str, detail: str) -> None:
+def mb_backoff_seconds() -> float:
+    """Current extra delay per MusicBrainz request, for the UI to report."""
+    return round(_mb_backoff, 2)
+
+
+class RateLimited(RuntimeError):
+    """Throttled rather than broken: expected, and self-correcting given time."""
+
+
+def note_failure(name: str, detail: str, limit: int | None = None) -> None:
+    """Count a strike. Three in a row and the source sits out for a while.
+
+    Rate limiting gets a longer rope than a real error, because the backoff is
+    already handling it and a brief 503 blip should not bench a working source.
+    But it is not infinite rope: once requests are a full half-minute apart the
+    pass has stopped being useful, and waiting is better than crawling.
+    """
+    limit = limit or STRIKES_BEFORE_BENCH
     _strikes[name] = _strikes.get(name, 0) + 1
-    if _strikes[name] == STRIKES_BEFORE_BENCH:
+    n = _strikes[name]
+
+    if n == limit:
         _benched[name] = time.time() + BENCH_SECONDS
-        db.log(f"{name} has failed {STRIKES_BEFORE_BENCH} times in a row "
-               f"({detail}). Skipping it for the next 30 minutes.", "warn")
-    elif _strikes[name] < STRIKES_BEFORE_BENCH:
+        db.log(f"{name} has failed {n} times in a row ({detail}). "
+               f"Leaving it alone for {BENCH_SECONDS // 60} minutes.", "warn")
+    elif n < limit:
         db.log(f"{name} lookup failed: {detail}", "warn")
 
 
-def _note_success(name: str) -> None:
+# Kept for callers that predate the rename.
+_note_failure = note_failure
+
+
+def note_success(name: str) -> None:
     _strikes.pop(name, None)
     _benched.pop(name, None)
+
+
+_note_success = note_success
 
 
 def is_benched(name: str) -> bool:
@@ -135,13 +162,16 @@ def mb_request(path: str, params: dict) -> dict:
         _mb_last = time.time()
         try:
             data = _get(base + path, params=params)
-            _mb_backoff = max(0.0, _mb_backoff - 0.5)   # ease back towards full speed
+            # Decay multiplicatively, mirroring the way it grew. Subtracting a
+            # flat 0.5s meant a backoff at the 30s cap needed sixty clean
+            # requests to recover, so in practice it never did.
+            _mb_backoff = 0.0 if _mb_backoff < 0.3 else _mb_backoff * 0.7
             return data
         except httpx.HTTPStatusError as exc:
             if exc.response.status_code in (429, 503):
                 _mb_backoff = min(_mb_backoff * 2 + 1, 30.0)
                 _mb_last = time.time()
-                raise RuntimeError(
+                raise RateLimited(
                     f"rate limited, slowing to one request every "
                     f"{1.05 + _mb_backoff:.0f}s") from exc
             raise
@@ -695,8 +725,11 @@ def gather(track: dict) -> tuple[list[dict], bool]:
             continue
         try:
             result = fn(track)
+        except RateLimited as exc:
+            note_failure(name, str(exc)[:160], limit=STRIKES_BEFORE_BENCH_RATE_LIMIT)
+            continue
         except Exception as exc:
-            _note_failure(name, str(exc)[:160])
+            note_failure(name, str(exc)[:160])
             continue
         _note_success(name)
         answered = True          # it replied, even if it had nothing to offer

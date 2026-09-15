@@ -57,6 +57,13 @@ const hours = (seconds) => {
 
 const basename = (p) => (p || '').split('/').pop();
 
+function elapsed(startedAt) {
+  const secs = Math.max(0, Math.floor(Date.now() / 1000 - startedAt));
+  if (secs < 60) return `${secs}s`;
+  if (secs < 3600) return `${Math.floor(secs / 60)}m ${secs % 60}s`;
+  return `${Math.floor(secs / 3600)}h ${Math.floor((secs % 3600) / 60)}m`;
+}
+
 const CODEC_COLOR = {
   FLAC: '#6FE3C4', ALAC: '#57C8E8', AAC: '#A98BFF', MP3: '#F2B03D',
   OPUS: '#E878C0', VORBIS: '#FF9D42', WAV: '#8CE0A0', WMA: '#7A8CA8',
@@ -215,10 +222,41 @@ async function poll() {
   } catch { return; }
   const s = state.status;
 
-  const busy = Boolean(s.worker.kind);
+  const w = s.worker;
+  const busy = Boolean(w.kind);
   $('#dot').classList.toggle('live', busy);
-  $('#worker-text').textContent = busy ? s.worker.message : 'Idle';
-  $('#worker-bar').style.width = busy ? `${Math.round(s.worker.progress * 100)}%` : '0%';
+
+  // Say what the job is, not just where it has got to. "Album 1371 of 1695"
+  // on its own could be a scan, a lookup or a conversion.
+  const label = w.cancelling ? 'Stopping…'
+    : busy ? (w.label || w.kind) + (w.stage ? ` · ${w.stage}` : '')
+    : 'Idle';
+  $('#job-label').textContent = label;
+  $('#job-detail').textContent = busy
+    ? [w.message, w.started_at ? elapsed(w.started_at) : null].filter(Boolean).join('  ·  ')
+    : '';
+  $('#job-detail').title = busy ? w.message : '';
+  // Throttling and benched sources explain a slow pass, so say so in the
+  // header rather than leaving it to be inferred from the activity log.
+  const src = s.sources || {};
+  const notes = [];
+  if (src.mb_backoff > 0.5) {
+    notes.push(`MusicBrainz throttling: one request every ${(1 + src.mb_backoff).toFixed(0)}s`);
+  }
+  if (src.benched?.length) {
+    notes.push(`Resting: ${src.benched.join(', ')}`);
+  }
+  let noteEl = $('#source-note');
+  if (!noteEl) {
+    noteEl = el('span', { class: 'chip wait', id: 'source-note' });
+    $('#job-detail').after(noteEl);
+  }
+  noteEl.textContent = notes.join(' · ');
+  noteEl.hidden = !notes.length;
+
+  $('#btn-stop').hidden = !busy;
+  $('#btn-stop').disabled = Boolean(w.cancelling);
+  $('#worker-bar').style.width = busy ? `${Math.round(w.progress * 100)}%` : '0%';
   $('#btn-scan').disabled = busy;
   $('#btn-pipeline').disabled = busy;
 
@@ -641,15 +679,133 @@ async function viewFormat() {
 /* --- review ------------------------------------------------------------ */
 
 let reviewKind = null;
+let reviewMode = 'grouped';
 const selected = new Set();
 
+/* A group described the way you would say it out loud, so the decision is
+   about the kind of change rather than about thirteen thousand rows. */
+function describeGroup(g) {
+  const n = num(g.n);
+  const FIELD = {
+    year: 'release year', track_no: 'track number', disc_no: 'disc number',
+    album_artist: 'album artist', artist: 'artist', album: 'album',
+    title: 'title', genre: 'genre',
+  };
+  const field = FIELD[g.field] || g.field;
+  const allBlank = g.filling_blanks === g.n;
+  const someBlank = g.filling_blanks > 0 && !allBlank;
+
+  if (g.kind === 'delete') return `Remove ${n} duplicate files`;
+  if (g.kind === 'convert') return `Convert ${n} files to your target format`;
+  if (g.kind === 'art') return `Embed artwork on ${n} tracks that have none`;
+  if (allBlank) return `Add a ${field} to ${n} tracks that have none`;
+  if (someBlank) return `Set the ${field} on ${n} tracks (${num(g.filling_blanks)} are blank)`;
+  return `Change the ${field} on ${n} tracks`;
+}
+
+const SOURCE_NAME = {
+  'musicbrainz-album': 'the album lookup', musicbrainz: 'MusicBrainz',
+  lastfm: 'Last.fm', discogs: 'Discogs', spotify: 'Spotify', acoustid: 'AcoustID',
+  coverartarchive: 'Cover Art Archive', 'name-cleanup': 'name cleanup',
+  'duplicate-scan': 'the duplicate scan', standardization: 'the format check',
+};
+
+const BAND = {
+  high: ['Very sure', 'good'], good: ['Fairly sure', 'wait'], low: ['Unsure', 'hot'],
+};
+
 async function viewReview() {
+  return reviewMode === 'grouped' ? reviewGrouped() : reviewFlat();
+}
+
+function reviewModeBar(counts) {
+  return el('div', { class: 'bar' },
+    el('div', { class: 'segs' },
+      el('button', {
+        class: 'sm' + (reviewMode === 'grouped' ? ' on' : ''),
+        onclick: () => { reviewMode = 'grouped'; render(); },
+      }, 'By kind of change'),
+      el('button', {
+        class: 'sm' + (reviewMode === 'flat' ? ' on' : ''),
+        onclick: () => { reviewMode = 'flat'; render(); },
+      }, 'Every change')),
+    el('div', { class: 'push' }),
+    counts.approved ? chip(`${num(counts.approved)} approved and ready`, 'good') : null,
+    counts.failed ? chip(`${num(counts.failed)} failed`, 'hot') : null,
+    el('button', {
+      class: 'go', disabled: !counts.approved, onclick: async () => {
+        await api('/run/apply', { method: 'POST', body: {} });
+        toast('Writing approved changes to your files.'); poll();
+      },
+    }, `Apply ${num(counts.approved || 0)} approved`));
+}
+
+async function reviewGrouped() {
+  const { counts, groups } = await api('/changes/grouped');
+
+  if (!groups.length) {
+    return card('Nothing waiting',
+      'Run a scan or a metadata lookup and anything Harmon wants to change appears here first.',
+      reviewModeBar(counts));
+  }
+
+  const rows = groups.map((g) => {
+    const [bandLabel, bandTone] = BAND[g.band] || BAND.good;
+    const samples = el('div', { class: 'gbody', style: 'display:none' });
+    let shown = false;
+
+    const decide = async (status) => {
+      const r = await api('/changes/decide-group', {
+        method: 'POST',
+        body: { kind: g.kind, field: g.field, source: g.source, band: g.band, status },
+      });
+      toast(`${num(r.updated)} changes ${status === 'approved' ? 'approved' : 'rejected'}.`);
+      render(); poll();
+    };
+
+    const head = el('div', { class: 'row', style: 'grid-template-columns:1fr auto auto auto auto' },
+      el('div', {},
+        el('div', { class: 'rname' }, describeGroup(g)),
+        el('div', { class: 'rmeta' },
+          `From ${SOURCE_NAME[g.source] || g.source || 'Harmon'}`,
+          g.lo === g.hi ? ` · ${Math.round(g.lo * 100)}% sure`
+                        : ` · ${Math.round(g.lo * 100)}–${Math.round(g.hi * 100)}% sure`)),
+      chip(bandLabel, bandTone),
+      el('button', {
+        class: 'sm', onclick: () => {
+          shown = !shown;
+          samples.style.display = shown ? 'flex' : 'none';
+        },
+      }, 'Examples'),
+      el('button', { class: 'go sm', onclick: () => decide('approved') }, `Approve ${num(g.n)}`),
+      el('button', { class: 'sm', onclick: () => decide('rejected') }, 'Reject'));
+
+    g.samples.forEach((sm) => samples.append(
+      el('div', { class: 'copy', style: 'grid-template-columns:1fr auto' },
+        el('div', {},
+          el('div', { class: 'rname' }, sm.title || basename(sm.path)),
+          el('div', { class: 'rmeta' }, [sm.artist, sm.album].filter(Boolean).join(' — ')),
+          el('div', { class: 'diff' },
+            sm.old_value ? el('s', {}, sm.old_value) : el('span', { class: 'rmeta' }, '(empty)'),
+            el('em', {}, g.kind === 'art' ? 'cover image' : sm.new_value))),
+        el('span', { class: 'chip mono' }, `${Math.round(sm.confidence * 100)}%`))));
+
+    return el('div', {}, head, samples);
+  });
+
+  return card(`${num(counts.pending)} changes, ${groups.length} decisions`,
+    'Harmon has grouped these by what they actually do, so you decide about a kind of change rather than about every row. Open Examples to see what a group contains before approving it. Nothing is written until you apply.',
+    reviewModeBar(counts),
+    el('div', { class: 'rows' }, rows));
+}
+
+async function reviewFlat() {
   const data = await api('/changes?status=pending&limit=400' +
     (reviewKind ? '&kind=' + reviewKind : ''));
   const { counts, items } = data;
   selected.clear();
 
-  const bar = el('div', { class: 'bar' },
+  const filters = el('div', { class: 'bar' },
     el('div', { class: 'segs' },
       [[null, 'Everything'], ['tag', 'Tags'], ['art', 'Artwork'],
        ['delete', 'Removals'], ['convert', 'Conversions']].map(([key, label]) =>
@@ -662,26 +818,20 @@ async function viewReview() {
       'Approve ticked'),
     el('button', {
       class: 'sm', disabled: !items.length, onclick: async () => {
+        const total = counts.by_kind?.[reviewKind] ?? counts.pending;
+        if (!confirm(`This approves all ${num(total)} pending changes matching this filter, not just the ${items.length} shown. Continue?`)) return;
         await api('/changes/decide-all', { method: 'POST', body: { kind: reviewKind, status: 'approved' } });
         toast('Approved. Apply them when you are ready.'); render(); poll();
       },
-    }, 'Approve all shown'),
+    }, 'Approve everything matching'),
     el('button', {
       class: 'sm', disabled: !items.length, onclick: async () => {
+        const total = counts.by_kind?.[reviewKind] ?? counts.pending;
+        if (!confirm(`This rejects all ${num(total)} pending changes matching this filter. Continue?`)) return;
         await api('/changes/decide-all', { method: 'POST', body: { kind: reviewKind, status: 'rejected' } });
         toast('Rejected.'); render(); poll();
       },
-    }, 'Reject all shown'),
-    el('button', {
-      class: 'go', disabled: !counts.approved, onclick: async () => {
-        await api('/run/apply', { method: 'POST', body: {} });
-        toast('Writing approved changes to your files.'); poll();
-      },
-    }, `Apply ${num(counts.approved || 0)} approved`));
-
-  const status = el('div', { class: 'bar' },
-    counts.approved ? chip(`${num(counts.approved)} approved and ready to write`, 'good') : null,
-    counts.failed ? chip(`${num(counts.failed)} failed`, 'hot') : null);
+    }, 'Reject everything matching'));
 
   const body = items.length
     ? el('div', { class: 'rows' }, items.map(changeRow))
@@ -690,8 +840,10 @@ async function viewReview() {
         'Run a scan or a metadata lookup and anything Harmon wants to change appears here first.');
 
   return card(`${num(counts.pending)} changes staged`,
-    'This is the only panel that writes to your library. Approve what you want, then apply — everything else stays as it is.',
-    bar, status, body);
+    items.length >= 400
+      ? `Showing the first ${items.length}. The bulk buttons act on everything matching the filter, not just what is on screen.`
+      : 'Approve what you want, then apply. Everything else stays as it is.',
+    reviewModeBar(counts), filters, body);
 }
 
 async function decideSelected(status) {
@@ -1054,6 +1206,12 @@ $('#btn-pipeline').addEventListener('click', async () => {
   poll();
 });
 
+$('#btn-stop').addEventListener('click', async () => {
+  await api('/worker/stop', { method: 'POST', body: {} });
+  toast('Stopping after the current item. Nothing already staged is lost.');
+  poll();
+});
+
 $$('.toptab').forEach((b) => b.addEventListener('click', () => switchTab(b.dataset.tab)));
 
 window.addEventListener('unhandledrejection', (e) => {
@@ -1074,9 +1232,8 @@ window.addEventListener('hashchange', () => {
     applyTheme(cfg.shell?.theme || 'nightfall');
     if (cfg.shell?.forge_url) {
       $('#subtitle').after(el('a', {
-        href: cfg.shell.forge_url, class: 'tag',
-        style: 'text-decoration:none;color:var(--signal)',
-      }, 'Forge'));
+        href: cfg.shell.forge_url, class: 'appjump', title: 'Open Forge',
+      }, el('i', { 'aria-hidden': 'true' }), 'Forge'));
     }
   } catch { applyTheme('nightfall'); }
 

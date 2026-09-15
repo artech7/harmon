@@ -10,8 +10,47 @@ from . import albums, changes, db, dupes, enrich, scanner, transcode
 from .config import get as get_config
 
 _pipeline_lock = threading.Lock()
-_stop = threading.Event()
-_current: dict = {"kind": None, "progress": 0.0, "message": "Idle", "job_id": None}
+_stop = threading.Event()          # shutdown
+_cancel = threading.Event()        # the user asked this job to stop
+
+# What each job actually is, in words. Without this the header shows a bare
+# counter and no way to tell a scan from a metadata pass.
+JOB_LABELS = {
+    "scan": "Scanning library",
+    "dupes": "Finding duplicates",
+    "enrich": "Looking up metadata",
+    "apply": "Writing approved changes",
+    "convert": "Converting files",
+    "pipeline": "Full pass",
+}
+
+_current: dict = {
+    "kind": None, "label": None, "progress": 0.0, "message": "Idle",
+    "job_id": None, "started_at": None, "stage": None, "cancelling": False,
+}
+
+
+def request_stop() -> bool:
+    """Ask the running job to stop at its next safe point."""
+    if not _current["kind"]:
+        return False
+    _cancel.set()
+    _current["cancelling"] = True
+    db.log(f"Stop requested during: {_current.get('label') or _current['kind']}")
+    return True
+
+
+def cancelled() -> bool:
+    return _cancel.is_set()
+
+
+class Cancelled(Exception):
+    """Raised at a checkpoint when the user has asked the job to stop."""
+
+
+def checkpoint() -> None:
+    if _cancel.is_set():
+        raise Cancelled()
 
 
 def status() -> dict:
@@ -22,17 +61,25 @@ def busy() -> bool:
     return _current["kind"] is not None
 
 
-def _start_job(kind: str, track_id: int | None = None) -> int:
+def _start_job(kind: str, track_id: int | None = None, stage: str | None = None) -> int:
     job_id = db.execute(
         "INSERT INTO jobs(kind, track_id, state, message) VALUES(?,?,'running','Starting')",
         (kind, track_id),
     )
-    _current.update({"kind": kind, "progress": 0.0, "message": "Starting", "job_id": job_id})
+    _cancel.clear()
+    _current.update({
+        "kind": kind, "label": JOB_LABELS.get(kind, kind), "progress": 0.0,
+        "message": "Starting", "job_id": job_id, "stage": stage,
+        "started_at": time.time(), "cancelling": False,
+    })
     return job_id
 
 
-def _update(job_id: int, progress: float, message: str) -> None:
+def _update(job_id: int, progress: float, message: str, stage: str | None = None) -> None:
+    checkpoint()
     _current.update({"progress": round(progress, 3), "message": message})
+    if stage:
+        _current["stage"] = stage
     db.execute(
         "UPDATE jobs SET progress=?, message=?, updated_at=datetime('now') WHERE id=?",
         (round(progress, 3), message, job_id),
@@ -45,7 +92,11 @@ def _finish(job_id: int, state: str, message: str, **extra) -> None:
         "updated_at=datetime('now') WHERE id=?",
         (state, message, extra.get("in_bytes"), extra.get("out_bytes"), job_id),
     )
-    _current.update({"kind": None, "progress": 0.0, "message": "Idle", "job_id": None})
+    _cancel.clear()
+    _current.update({
+        "kind": None, "label": None, "progress": 0.0, "message": "Idle",
+        "job_id": None, "stage": None, "started_at": None, "cancelling": False,
+    })
 
 
 def in_schedule_window() -> bool:
@@ -66,11 +117,14 @@ def run_scan(force: bool = False) -> dict:
     with _pipeline_lock:
         job = _start_job("scan")
         try:
-            result = scanner.scan(force, lambda p, m: _update(job, p * 0.7, m))
-            _update(job, 0.75, "Looking for duplicates")
+            result = scanner.scan(force, lambda p, m: _update(job, p * 0.7, m, "Reading files"))
+            _update(job, 0.75, "Looking for duplicates", "Grouping duplicates")
             result["dupes"] = dupes.find()
             _finish(job, "done", f"{result['added']} new, {result['updated']} changed")
             return result
+        except Cancelled:
+            _finish(job, "cancelled", "Stopped at your request")
+            return {"cancelled": True}
         except Exception as exc:
             _finish(job, "failed", str(exc)[:300])
             raise
@@ -83,6 +137,9 @@ def run_dupes() -> dict:
             result = dupes.find()
             _finish(job, "done", f"{result['same_album']} duplicate sets found")
             return result
+        except Cancelled:
+            _finish(job, "cancelled", "Stopped at your request")
+            return {"cancelled": True}
         except Exception as exc:
             _finish(job, "failed", str(exc)[:300])
             raise
@@ -103,22 +160,27 @@ def run_enrich(track_ids: list[int] | None = None) -> dict:
                 _finish(job, "done", f"{result['staged']} suggestions ready to review")
                 return result
 
-            _update(job, 0.02, "Looking up albums")
-            album_result = albums.run(progress=lambda p, m: _update(job, p * 0.8, m))
+            _update(job, 0.02, "Looking up albums", "Albums")
+            album_result = albums.run(
+                progress=lambda p, m: _update(job, p * 0.8, m, "Albums"))
 
             leftovers = albums.loose_track_ids() + enrich.pending_track_ids()
             leftovers = list(dict.fromkeys(leftovers))
             track_result = {"staged": 0, "tracks": 0}
             if leftovers:
-                _update(job, 0.82, f"{len(leftovers)} tracks need checking one by one")
+                _update(job, 0.82, f"{len(leftovers)} tracks need checking one by one",
+                        "Single tracks")
                 track_result = enrich.propose_many(
-                    leftovers, lambda p, m: _update(job, 0.82 + p * 0.18, m))
+                    leftovers, lambda p, m: _update(job, 0.82 + p * 0.18, m, "Single tracks"))
 
             staged = album_result["staged"] + track_result["staged"]
             _finish(job, "done",
                     f"{staged} suggestions ready to review "
                     f"({album_result['albums']} albums, {len(leftovers)} single tracks)")
             return {"albums": album_result, "tracks": track_result, "staged": staged}
+        except Cancelled:
+            _finish(job, "cancelled", "Stopped at your request")
+            return {"cancelled": True}
         except Exception as exc:
             _finish(job, "failed", str(exc)[:300])
             raise
@@ -131,6 +193,9 @@ def run_apply() -> dict:
             result = changes.apply_approved(lambda p, m: _update(job, p, m))
             _finish(job, "done", f"{result['applied']} changes written")
             return result
+        except Cancelled:
+            _finish(job, "cancelled", "Stopped at your request")
+            return {"cancelled": True}
         except Exception as exc:
             _finish(job, "failed", str(exc)[:300])
             raise
@@ -150,7 +215,7 @@ def run_conversions(limit: int = 500) -> dict:
         total = len(rows)
         try:
             for i, row in enumerate(rows):
-                if _stop.is_set() or not in_schedule_window():
+                if _stop.is_set() or _cancel.is_set() or not in_schedule_window():
                     break
                 base = i / total
                 track = db.one("SELECT missing, path FROM tracks WHERE id=?", (row["track_id"],))
@@ -177,6 +242,9 @@ def run_conversions(limit: int = 500) -> dict:
                     failed += 1
             _finish(job, "done", f"{done} converted, {saved / 1048576:.0f} MB saved")
             return {"converted": done, "failed": failed, "saved": saved}
+        except Cancelled:
+            _finish(job, "cancelled", "Stopped at your request")
+            return {"cancelled": True}
         except Exception as exc:
             _finish(job, "failed", str(exc)[:300])
             raise

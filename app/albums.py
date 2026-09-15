@@ -211,14 +211,33 @@ def run(limit: int = 0, progress=None) -> dict:
     providers.revive_all()
     batch = uuid.uuid4().hex[:12]
     albums = groups(limit)
-    totals = {"albums": len(albums), "matched": 0, "staged": 0,
-              "tracks": 0, "unmatched_albums": 0, "requests": 0}
+    totals = {"albums": len(albums), "matched": 0, "staged": 0, "tracks": 0,
+              "unmatched_albums": 0, "requests": 0, "stopped_early": False}
 
     for i, album in enumerate(albums):
+        # The album path used to swallow its own errors, so a source could fail
+        # on every album of the run without ever earning a strike. Route
+        # failures through the same breaker the per-track path uses.
+        if providers.is_benched("musicbrainz"):
+            totals["stopped_early"] = True
+            db.log(
+                f"Stopped the album pass after {i} of {len(albums)} albums: "
+                f"MusicBrainz is not answering. Harmon will pick up where it "
+                f"left off on the next pass.", "warn"
+            )
+            break
+
         try:
             result = enrich_album(album["album_key"], batch)
+            providers.note_success("musicbrainz")
+        except providers.RateLimited as exc:
+            providers.note_failure(
+                "musicbrainz", str(exc)[:140],
+                limit=providers.STRIKES_BEFORE_BENCH_RATE_LIMIT,
+            )
+            continue
         except Exception as exc:
-            db.log(f"Album lookup failed for {album['album']!r}: {str(exc)[:140]}", "warn")
+            providers.note_failure("musicbrainz", f"{album['album']!r}: {str(exc)[:110]}")
             continue
         totals["matched"] += result["matched"]
         totals["staged"] += result["staged"]
@@ -227,12 +246,15 @@ def run(limit: int = 0, progress=None) -> dict:
         if not result["matched"]:
             totals["unmatched_albums"] += 1
         if progress:
+            # Raises if the user has asked the job to stop, so a long pass can
+            # be interrupted between albums rather than only between runs.
             progress((i + 1) / max(len(albums), 1),
                      f"Album {i + 1} of {len(albums)}: {album['album'] or 'untitled'}")
 
-    db.log(
-        f"Album pass: {totals['matched']} of {totals['tracks']} tracks matched across "
-        f"{totals['albums']} albums, {totals['staged']} changes staged "
-        f"(~{totals['requests']} requests instead of {totals['tracks']})"
-    )
+    if not totals["stopped_early"]:
+        db.log(
+            f"Album pass: {totals['matched']} of {totals['tracks']} tracks matched across "
+            f"{totals['albums']} albums, {totals['staged']} changes staged "
+            f"(~{totals['requests']} requests instead of {totals['tracks']})"
+        )
     return totals

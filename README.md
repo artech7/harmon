@@ -51,8 +51,15 @@ Metadata screen estimates what the next pass will cost before you start it.
 
 MusicBrainz allows one request per second and offers no token or paid tier that
 raises it — throttling is by User-Agent, by IP, and by how busy their servers
-are overall, so a 503 can arrive however well-behaved you are. Harmon backs off
-when that happens and eases back up as they recover. Results cache for 30 days.
+are overall, so a 503 can arrive however well-behaved you are.
+
+When that happens Harmon doubles the delay between requests, up to thirty
+seconds, and decays it back down as they recover. If throttling persists it
+stops the pass rather than crawling: eight consecutive rate limits and the
+source rests for half an hour, then picks up exactly where it left off. A hard
+error benches after three. Any source that starts answering again clears its
+own strikes. The header shows the current delay and any resting source, so a
+slow pass explains itself. Results cache for 30 days.
 
 If a first pass over a large library is too slow, run your own copy with
 [musicbrainz-docker](https://github.com/metabrainz/musicbrainz-docker) and put
