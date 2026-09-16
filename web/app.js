@@ -190,7 +190,6 @@ const TABS = {
   duplicates: viewDuplicates,
   folders: viewFolders,
   metadata: viewMetadata,
-  format: viewFormat,
   review: viewReview,
   settings: viewSettings,
 };
@@ -200,7 +199,6 @@ const SUBTITLE = {
   duplicates: 'copies of the same song',
   folders: 'browse the library as it sits on disk',
   metadata: 'artists, albums, genres, artwork',
-  format: 'codec and bitrate',
   review: 'nothing is written until you approve it',
   settings: 'folders, sources, automation',
 };
@@ -311,7 +309,7 @@ function paint(s) {
   setProp('#badge-review', 'textContent', s.changes.pending || '');
   setProp('#badge-dupes', 'textContent',
     (s.duplicates.same_album || 0) + (s.duplicates.identical || 0) || '');
-  setProp('#badge-format', 'textContent', s.changes.by_kind?.convert || '');
+
 
   if (lastWorkerKind && !s.worker.kind) {
     render();
@@ -323,10 +321,11 @@ function paint(s) {
 /* --- overview ---------------------------------------------------------- */
 
 async function viewOverview() {
-  const [s, activity, format] = await Promise.all([
-    api('/status'), api('/activity?limit=25'), api('/standardize'),
+  const [s, activity, format, cfg] = await Promise.all([
+    api('/status'), api('/activity?limit=25'), api('/standardize'), api('/config'),
   ]);
   state.status = s;
+  state.config = cfg;
   const lib = s.library;
   const frag = document.createDocumentFragment();
 
@@ -361,12 +360,15 @@ async function viewOverview() {
       codecs.map(([name, count]) => el('span', {},
         el('i', { style: `background:${colorFor(name)}` }), `${name} ${num(count)}`)))));
 
+  const targetLabel = (state.config?.target?.codec || '').toUpperCase();
   frag.append(el('div', { class: 'stats' },
     stat('Duplicate sets', num(s.duplicates.same_album + s.duplicates.identical),
       s.reclaimable_bytes ? `${bytes(s.reclaimable_bytes)} to reclaim` : 'Nothing to clean up',
       s.duplicates.same_album ? 'hot' : 'good'),
-    stat('Off target format', num(format.needs_convert),
-      `${num(format.matching)} already match`, format.needs_convert ? 'hot' : 'good'),
+    stat(targetLabel ? `Already ${targetLabel}` : 'Already on target',
+      num(format.matching), 'Nothing to do', 'good'),
+    stat('Protected', num(format.protected),
+      'Lossless, or already below target'),
     stat('No artwork', num(lib.no_art), 'Harmon can fetch covers'),
     stat('No genre', num(lib.no_genre), 'Filled from Last.fm, Discogs, Spotify')));
 
@@ -752,14 +754,15 @@ async function viewMetadata() {
 
 /* --- format ------------------------------------------------------------ */
 
-async function viewFormat() {
-  const [cfg, codecs, summary] = await Promise.all([
-    api('/config'), api('/codecs'), api('/standardize'),
-  ]);
+/* The format settings, built here so Settings can host them. What used to be
+   the Format tab was two different things wearing one hat: the settings that
+   decide the target, and the status of the library against it. Those belong in
+   Settings and on Overview respectively. */
+async function formatSettingsCard() {
+  const [cfg, codecs] = await Promise.all([api('/config'), api('/codecs')]);
   state.config = cfg;
   const target = cfg.target;
   const spec = codecs[target.codec];
-  const frag = document.createDocumentFragment();
 
   const save = async (patch) => {
     state.config = await api('/config', { method: 'PUT', body: { target: patch } });
@@ -794,7 +797,7 @@ async function viewFormat() {
           value: v, selected: v === target.samplerate ? 'selected' : null,
         }, label)))));
 
-  frag.append(card('The format you want everything in',
+  return card('The format you want everything in',
     'New music is checked against this automatically, converted, and swapped in — the same way Forge handles video.',
     el('div', { class: 'codecs' },
       Object.entries(codecs).map(([key, c]) => el('button', {
@@ -832,34 +835,10 @@ async function viewFormat() {
       label: 'Originals folder',
       value: target.originals_path,
       blurb: 'Replaced sources and removed duplicates both land here.',
-      save: async (v) => { state.config = await api('/config', { method: 'PUT', body: { target: { originals_path: v } } }); },
-    })));
-
-  frag.append(el('div', { class: 'stats' },
-    stat(`Already ${spec.label}`, num(summary.matching), null, 'good'),
-    stat('Need converting', num(summary.needs_convert), null, summary.needs_convert ? 'hot' : null),
-    stat('Protected', num(summary.protected), 'Lossless, or already below target')));
-
-  frag.append(card('Queue the conversions',
-    `Harmon will stage ${num(summary.needs_convert)} files. Conversions run one at a time, are checked against the source length before the swap, and never start until you approve them in Review.`,
-    el('div', { class: 'bar' },
-      el('button', {
-        class: 'go', disabled: !summary.needs_convert,
-        onclick: async () => {
-          const r = await api('/standardize/stage', { method: 'POST', body: {} });
-          toast(`${r.staged} conversions staged.`);
-          poll(); render();
-        },
-      }, 'Stage conversions'),
-      el('button', {
-        onclick: async () => {
-          await api('/run/convert', { method: 'POST', body: {} });
-          toast('Running approved conversions.');
-          poll();
-        },
-      }, 'Run approved conversions now'))));
-
-  return frag;
+      save: async (v) => {
+        state.config = await api('/config', { method: 'PUT', body: { target: { originals_path: v } } });
+      },
+    }));
 }
 
 /* --- review ------------------------------------------------------------ */
@@ -966,13 +945,46 @@ async function showAllInGroup(g, host) {
   }
 }
 
+/* Files that do not match the target are work waiting on a decision, which is
+   what this tab is for. The settings that decide the target live in Settings. */
+async function conversionCard() {
+  const [format, cfg] = await Promise.all([api('/standardize'), api('/config')]);
+  const label = (cfg.target.codec || '').toUpperCase();
+  if (!format.needs_convert) {
+    return card('Format', `Everything is ${label} or protected. Nothing to convert.`);
+  }
+  return card('Needs converting',
+    `${num(format.needs_convert)} files are not ${label} yet. Staging them puts them in the list below with everything else, so they go through the same approval. Conversions run one at a time and are checked against the source length before the swap.`,
+    el('div', { class: 'bar' },
+      el('button', {
+        class: 'go', onclick: async () => {
+          const r = await api('/standardize/stage', { method: 'POST', body: {} });
+          toast(`${r.staged} conversions staged.`);
+          render(); poll();
+        },
+      }, `Stage ${num(format.needs_convert)} conversions`),
+      el('button', {
+        onclick: async () => {
+          await api('/run/convert', { method: 'POST', body: {} });
+          toast('Running approved conversions.');
+          poll();
+        },
+      }, 'Run approved conversions now'),
+      el('button', {
+        class: 'sm', onclick: () => { settingsSection = 'format'; switchTab('settings'); },
+      }, 'Change the target format')));
+}
+
 async function reviewGrouped() {
   const { counts, groups } = await api('/changes/grouped');
 
   if (!groups.length) {
-    return card('Nothing waiting',
+    const empty = document.createDocumentFragment();
+    empty.append(await conversionCard());
+    empty.append(card('Nothing waiting',
       'Run a scan or a metadata lookup and anything Harmon wants to change appears here first.',
-      reviewModeBar(counts));
+      reviewModeBar(counts)));
+    return empty;
   }
 
   const rows = groups.map((g) => {
@@ -1025,10 +1037,13 @@ async function reviewGrouped() {
     return el('div', {}, head, samples);
   });
 
-  return card(`${num(counts.pending)} changes, ${groups.length} decisions`,
+  const frag = document.createDocumentFragment();
+  frag.append(await conversionCard());
+  frag.append(card(`${num(counts.pending)} changes, ${groups.length} decisions`,
     'Harmon has grouped these by what they actually do, so you decide about a kind of change rather than about every row. Open Examples to see what a group contains before approving it. Nothing is written until you apply.',
     reviewModeBar(counts),
-    el('div', { class: 'rows' }, rows));
+    el('div', { class: 'rows' }, rows)));
+  return frag;
 }
 
 async function reviewFlat() {
@@ -1141,10 +1156,30 @@ function changeRow(c) {
 
 /* --- settings ---------------------------------------------------------- */
 
+const SETTINGS_SECTIONS = [
+  ['library', 'Library'],
+  ['format', 'Format'],
+  ['metadata', 'Metadata'],
+  ['duplicates', 'Duplicates'],
+  ['automation', 'Automation'],
+  ['appearance', 'Appearance'],
+];
+let settingsSection = 'library';
+
 async function viewSettings() {
   const [cfg, status] = await Promise.all([api('/config'), api('/status')]);
   state.config = cfg;
   const frag = document.createDocumentFragment();
+
+  frag.append(el('div', { class: 'bar' },
+    el('div', { class: 'segs pills' },
+      SETTINGS_SECTIONS.map(([key, label]) => el('button', {
+        class: 'sm' + (settingsSection === key ? ' on' : ''),
+        onclick: () => { settingsSection = key; render(); },
+      }, label)))));
+
+  const show = (name) => settingsSection === name;
+  if (show('format')) frag.append(await formatSettingsCard());
 
   const save = async (patch, again = false) => {
     state.config = await api('/config', { method: 'PUT', body: patch });
@@ -1153,7 +1188,7 @@ async function viewSettings() {
 
   /* Connection check */
   const netOut = el('div', { class: 'rows' });
-  frag.append(card('Check the connection',
+  if (show('library')) frag.append(card('Check the connection',
     'If lookups fail with a name resolution error, run this. It tests one layer at a time, so the first thing that fails is the thing to fix.',
     el('div', { class: 'bar' },
       el('button', {
@@ -1177,7 +1212,7 @@ async function viewSettings() {
     netOut));
 
   /* Appearance */
-  frag.append(card('Appearance', 'Four palettes, one shape. Nothing about the layout changes.',
+  if (show('appearance')) frag.append(card('Appearance', 'Four palettes, one shape. Nothing about the layout changes.',
     el('div', { class: 'grid2' },
       THEMES.map(([key, label, swatch, blurb]) => el('button', {
         class: 'codec' + ((cfg.shell?.theme || 'nightfall') === key ? ' on' : ''),
@@ -1195,7 +1230,7 @@ async function viewSettings() {
   const pathInput = el('input', { type: 'text', placeholder: '/music' });
   const nameInput = el('input', { type: 'text', placeholder: 'Music' });
 
-  frag.append(card('Music folders',
+  if (show('library')) frag.append(card('Music folders',
     'The paths as Harmon sees them inside its container, not as they look on your NAS. If you mounted your library at /music, that is what goes here.',
     el('div', { class: 'rows' },
       status.libraries.length
@@ -1291,7 +1326,7 @@ async function viewSettings() {
     return field;
   };
 
-  frag.append(card('Where metadata comes from',
+  if (show('metadata')) frag.append(card('Where metadata comes from',
     'Harmon asks these in order and takes the first answer for each field, so a source with no key is skipped and the next one fills the gap.',
     orderRows,
     el('div', { class: 'grid2', style: 'margin-top:18px' },
@@ -1329,7 +1364,7 @@ async function viewSettings() {
         'Each field also saves on its own when you leave it or press Enter.'))));
 
   /* Enrichment */
-  frag.append(card('What Harmon is allowed to correct',
+  if (show('metadata')) frag.append(card('What Harmon is allowed to correct',
     'Turn off anything you would rather keep exactly as you tagged it.',
     Object.entries(cfg.enrich.fields).map(([f, on]) => swRow(
       f.replace('_', ' ').replace(/^./, (c) => c.toUpperCase()),
@@ -1354,7 +1389,7 @@ async function viewSettings() {
       cfg.enrich.overwrite_existing, (v) => save({ enrich: { overwrite_existing: v } }))));
 
   /* Duplicates */
-  frag.append(card('How duplicates are judged',
+  if (show('duplicates')) frag.append(card('How duplicates are judged',
     'Two files are the same song when artist and title match after Harmon strips things like "Remastered" and "feat.", and their lengths are close enough.',
     el('div', { class: 'grid2' },
       textField({
@@ -1374,7 +1409,7 @@ async function viewSettings() {
 
   /* Automation */
   const a = cfg.automation;
-  frag.append(card('How much Harmon does on its own',
+  if (show('automation')) frag.append(card('How much Harmon does on its own',
     'Scanning, looking things up and staging are always safe — they change nothing on disk. The approval switches are the ones that let Harmon write without asking.',
     swRow('Watch the library for new music',
       'Re-scans on a timer and runs new files through the whole check.',
@@ -1411,7 +1446,7 @@ async function viewSettings() {
         })))));
 
   /* Forge link */
-  frag.append(card('Link to Forge',
+  if (show('appearance')) frag.append(card('Link to Forge',
     'Harmon and Forge stay separate apps. Set an address here and a link to Forge appears in the header — nothing more clever than that.',
     textField({
       label: 'Forge address',
