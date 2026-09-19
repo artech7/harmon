@@ -97,29 +97,41 @@ def grouped(status: str = "pending") -> list[dict]:
 
 
 def decide_group(kind: str, field: str | None, source: str | None, band: str,
-                 status: str) -> int:
-    """Approve or reject one whole kind of change in a single decision."""
+                 status: str, from_status: str = "pending") -> int:
+    """Move one whole kind of change from one status to another.
+
+    Approving used to be a one-way door: everything here only ever read from
+    'pending', so an accidental approval could not be taken back. It moves in
+    both directions now — the only thing that cannot be undone is a change
+    already written to disk.
+    """
     bands = {"high": (0.9, 1.01), "good": (0.75, 0.9), "low": (-0.01, 0.75)}
     lo, hi = bands.get(band, (-0.01, 1.01))
-    before = db.one("SELECT COUNT(*) AS n FROM changes WHERE status='pending' "
-                    "AND kind=? AND source IS ? AND (field IS ? OR (field IS NULL AND ? IS NULL)) "
-                    "AND confidence >= ? AND confidence < ?",
-                    (kind, source, field, field, lo, hi))["n"]
+    args = (kind, source, field, field, lo, hi)
+    before = db.one(
+        "SELECT COUNT(*) AS n FROM changes WHERE status=? "
+        "AND kind=? AND source IS ? AND (field IS ? OR (field IS NULL AND ? IS NULL)) "
+        "AND confidence >= ? AND confidence < ?", (from_status,) + args,
+    )["n"]
     db.execute(
-        "UPDATE changes SET status=? WHERE status='pending' AND kind=? AND source IS ? "
+        "UPDATE changes SET status=? WHERE status=? AND kind=? AND source IS ? "
         "AND (field IS ? OR (field IS NULL AND ? IS NULL)) "
         "AND confidence >= ? AND confidence < ?",
-        (status, kind, source, field, field, lo, hi),
+        (status, from_status) + args,
     )
     return before
 
 
 def set_status(ids: list[int], status: str) -> int:
+    """Move specific changes. Anything already written to disk is untouchable."""
     if not ids:
         return 0
     marks = ",".join("?" for _ in ids)
-    db.execute(f"UPDATE changes SET status=? WHERE id IN ({marks}) AND status='pending'",
-               (status, *ids))
+    db.execute(
+        f"UPDATE changes SET status=? WHERE id IN ({marks}) "
+        f"AND status IN ('pending','approved','rejected')",
+        (status, *ids),
+    )
     return len(ids)
 
 

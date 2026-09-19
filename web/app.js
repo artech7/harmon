@@ -845,6 +845,7 @@ async function formatSettingsCard() {
 
 let reviewKind = null;
 let reviewMode = 'grouped';
+let reviewStatus = 'pending';
 const selected = new Set();
 
 /* A group described the way you would say it out loud, so the decision is
@@ -884,25 +885,46 @@ async function viewReview() {
 }
 
 function reviewModeBar(counts) {
-  return el('div', { class: 'bar' },
-    el('div', { class: 'segs' },
+  return el('div', {},
+    el('div', { class: 'bar' },
+      el('div', { class: 'segs pills' },
+        el('button', {
+          class: 'sm' + (reviewStatus === 'pending' ? ' on' : ''),
+          onclick: () => { reviewStatus = 'pending'; render(); },
+        }, `Waiting${counts.pending ? ` (${num(counts.pending)})` : ''}`),
+        el('button', {
+          class: 'sm' + (reviewStatus === 'approved' ? ' on' : ''),
+          onclick: () => { reviewStatus = 'approved'; render(); },
+        }, `Approved${counts.approved ? ` (${num(counts.approved)})` : ''}`),
+        el('button', {
+          class: 'sm' + (reviewStatus === 'rejected' ? ' on' : ''),
+          onclick: () => { reviewStatus = 'rejected'; render(); },
+        }, `Skipped${counts.rejected ? ` (${num(counts.rejected)})` : ''}`)),
+      el('div', { class: 'push' }),
+      el('div', { class: 'segs' },
+        el('button', {
+          class: 'sm' + (reviewMode === 'grouped' ? ' on' : ''),
+          onclick: () => { reviewMode = 'grouped'; render(); },
+        }, 'By kind'),
+        el('button', {
+          class: 'sm' + (reviewMode === 'flat' ? ' on' : ''),
+          onclick: () => { reviewMode = 'flat'; render(); },
+        }, 'Every change'))),
+    el('div', { class: 'bar' },
+      counts.failed ? chip(`${num(counts.failed)} failed`, 'hot') : null,
+      el('div', { class: 'push' }),
       el('button', {
-        class: 'sm' + (reviewMode === 'grouped' ? ' on' : ''),
-        onclick: () => { reviewMode = 'grouped'; render(); },
-      }, 'By kind of change'),
-      el('button', {
-        class: 'sm' + (reviewMode === 'flat' ? ' on' : ''),
-        onclick: () => { reviewMode = 'flat'; render(); },
-      }, 'Every change')),
-    el('div', { class: 'push' }),
-    counts.approved ? chip(`${num(counts.approved)} approved and ready`, 'good') : null,
-    counts.failed ? chip(`${num(counts.failed)} failed`, 'hot') : null,
-    el('button', {
-      class: 'go', disabled: !counts.approved, onclick: async () => {
-        await api('/run/apply', { method: 'POST', body: {} });
-        toast('Writing approved changes to your files.'); poll();
-      },
-    }, `Apply ${num(counts.approved || 0)} approved`));
+        class: 'go', disabled: !counts.approved,
+        onclick: async () => {
+          if (!confirm(
+              `Write ${num(counts.approved)} approved changes to your files?\n\n` +
+              `This is the point of no return — everything before it is reversible. ` +
+              `Removed files move to your originals folder, and converted sources are ` +
+              `kept there too if that setting is on.`)) return;
+          await api('/run/apply', { method: 'POST', body: {} });
+          toast('Writing approved changes to your files.'); poll();
+        },
+      }, `Apply ${num(counts.approved || 0)} approved`)));
 }
 
 /* The samples answer "what does this look like". This answers "show me every
@@ -976,13 +998,17 @@ async function conversionCard() {
 }
 
 async function reviewGrouped() {
-  const { counts, groups } = await api('/changes/grouped');
+  const { counts, groups } = await api('/changes/grouped?status=' + reviewStatus);
 
   if (!groups.length) {
     const empty = document.createDocumentFragment();
     empty.append(await conversionCard());
-    empty.append(card('Nothing waiting',
-      'Run a scan or a metadata lookup and anything Harmon wants to change appears here first.',
+    empty.append(card(
+      { pending: 'Nothing waiting', approved: 'Nothing approved',
+        rejected: 'Nothing skipped' }[reviewStatus],
+      { pending: 'Run a scan or a metadata lookup and anything Harmon wants to change appears here first.',
+        approved: 'Approve something from the Waiting tab and it collects here until you apply it.',
+        rejected: 'Anything you skip collects here, in case you want it back.' }[reviewStatus],
       reviewModeBar(counts)));
     return empty;
   }
@@ -992,12 +1018,15 @@ async function reviewGrouped() {
     const samples = el('div', { class: 'gbody', style: 'display:none' });
     let shown = false;
 
-    const decide = async (status) => {
+    const VERB = { approved: 'approved', rejected: 'skipped', pending: 'moved back to waiting' };
+    const decide = async (status, ask) => {
+      if (ask && !confirm(`${ask}\n\n${describeGroup(g)}\nFrom ${SOURCE_NAME[g.source] || g.source}.`)) return;
       const r = await api('/changes/decide-group', {
         method: 'POST',
-        body: { kind: g.kind, field: g.field, source: g.source, band: g.band, status },
+        body: { kind: g.kind, field: g.field, source: g.source, band: g.band,
+                status, from_status: reviewStatus },
       });
-      toast(`${num(r.updated)} changes ${status === 'approved' ? 'approved' : 'rejected'}.`);
+      toast(`${num(r.updated)} changes ${VERB[status]}.`);
       render(); poll();
     };
 
@@ -1018,8 +1047,21 @@ async function reviewGrouped() {
       el('button', {
         class: 'sm', onclick: () => showAllInGroup(g, samples),
       }, `View all ${num(g.n)}`),
-      el('button', { class: 'go sm', onclick: () => decide('approved') }, `Approve ${num(g.n)}`),
-      el('button', { class: 'sm', onclick: () => decide('rejected') }, 'Reject'));
+      ...(reviewStatus === 'approved'
+        ? [el('button', {
+              class: 'sm', onclick: () => decide('pending'),
+            }, `Undo approval (${num(g.n)})`),
+           el('button', { class: 'sm', onclick: () => decide('rejected') }, 'Skip instead')]
+        : reviewStatus === 'rejected'
+        ? [el('button', {
+              class: 'sm', onclick: () => decide('pending'),
+            }, `Put back (${num(g.n)})`)]
+        : [el('button', {
+              class: 'go sm',
+              onclick: () => decide('approved',
+                `Approve ${num(g.n)} changes?\n\nNothing is written yet — you can undo this from the Approved tab until you press Apply.`),
+            }, `Approve ${num(g.n)}`),
+           el('button', { class: 'sm', onclick: () => decide('rejected') }, 'Skip')]));
 
     g.samples.forEach((sm) => samples.append(
       el('div', { class: 'copy', style: 'grid-template-columns:1fr auto auto' },
@@ -1039,15 +1081,24 @@ async function reviewGrouped() {
 
   const frag = document.createDocumentFragment();
   frag.append(await conversionCard());
-  frag.append(card(`${num(counts.pending)} changes, ${groups.length} decisions`,
-    'Harmon has grouped these by what they actually do, so you decide about a kind of change rather than about every row. Open Examples to see what a group contains before approving it. Nothing is written until you apply.',
+  const heading = {
+    pending: `${num(counts.pending)} waiting, ${groups.length} decisions`,
+    approved: `${num(counts.approved)} approved and not yet written`,
+    rejected: `${num(counts.rejected)} skipped`,
+  }[reviewStatus];
+  const lede = {
+    pending: 'Grouped by what they actually do, so you decide about a kind of change rather than about every row. Open Examples to see what a group contains. Nothing is written until you apply.',
+    approved: 'These will be written the next time you press Apply. Until then you can undo any of it.',
+    rejected: 'Skipped for now. Put any of it back if you change your mind.',
+  }[reviewStatus];
+  frag.append(card(heading, lede,
     reviewModeBar(counts),
     el('div', { class: 'rows' }, rows)));
   return frag;
 }
 
 async function reviewFlat() {
-  const data = await api('/changes?status=pending&limit=400' +
+  const data = await api(`/changes?status=${reviewStatus}&limit=400` +
     (reviewKind ? '&kind=' + reviewKind : ''));
   const { counts, items } = data;
   selected.clear();
@@ -1061,24 +1112,41 @@ async function reviewFlat() {
           onclick: () => { reviewKind = key; render(); },
         }, label + (counts.by_kind?.[key] ? ` (${counts.by_kind[key]})` : '')))),
     el('div', { class: 'push' }),
-    el('button', { class: 'sm', disabled: !items.length, onclick: () => decideSelected('approved') },
-      'Approve ticked'),
-    el('button', {
-      class: 'sm', disabled: !items.length, onclick: async () => {
-        const total = counts.by_kind?.[reviewKind] ?? counts.pending;
-        if (!confirm(`This approves all ${num(total)} pending changes matching this filter, not just the ${items.length} shown. Continue?`)) return;
-        await api('/changes/decide-all', { method: 'POST', body: { kind: reviewKind, status: 'approved' } });
-        toast('Approved. Apply them when you are ready.'); render(); poll();
-      },
-    }, 'Approve everything matching'),
-    el('button', {
-      class: 'sm', disabled: !items.length, onclick: async () => {
-        const total = counts.by_kind?.[reviewKind] ?? counts.pending;
-        if (!confirm(`This rejects all ${num(total)} pending changes matching this filter. Continue?`)) return;
-        await api('/changes/decide-all', { method: 'POST', body: { kind: reviewKind, status: 'rejected' } });
-        toast('Rejected.'); render(); poll();
-      },
-    }, 'Reject everything matching'));
+    ...(reviewStatus === 'approved'
+      ? [el('button', {
+            class: 'sm', disabled: !items.length,
+            onclick: () => decideSelected('pending'),
+          }, 'Undo ticked'),
+         el('button', {
+            class: 'sm', disabled: !items.length, onclick: async () => {
+              if (!confirm(`Move all ${num(counts.approved)} approved changes back to waiting?`)) return;
+              await api('/changes/decide-all', { method: 'POST',
+                body: { kind: reviewKind, status: 'pending', from_status: 'approved' } });
+              toast('Moved back to waiting.'); render(); poll();
+            },
+          }, 'Undo everything approved')]
+      : [el('button', {
+            class: 'sm', disabled: !items.length,
+            onclick: () => decideSelected('approved'),
+          }, 'Approve ticked'),
+         el('button', {
+            class: 'sm', disabled: !items.length, onclick: async () => {
+              const total = counts.by_kind?.[reviewKind] ?? counts.pending;
+              if (!confirm(`Approve all ${num(total)} changes matching this filter, not just the ${items.length} shown?\n\nNothing is written yet — you can undo this from the Approved tab until you press Apply.`)) return;
+              await api('/changes/decide-all', { method: 'POST',
+                body: { kind: reviewKind, status: 'approved', from_status: reviewStatus } });
+              toast('Approved. Apply them when you are ready.'); render(); poll();
+            },
+          }, 'Approve everything matching'),
+         el('button', {
+            class: 'sm', disabled: !items.length, onclick: async () => {
+              const total = counts.by_kind?.[reviewKind] ?? counts.pending;
+              if (!confirm(`Skip all ${num(total)} changes matching this filter?`)) return;
+              await api('/changes/decide-all', { method: 'POST',
+                body: { kind: reviewKind, status: 'rejected', from_status: reviewStatus } });
+              toast('Skipped.'); render(); poll();
+            },
+          }, 'Skip everything matching')]));
 
   const body = items.length
     ? el('div', { class: 'rows' }, items.map(changeRow))
@@ -1140,12 +1208,19 @@ function changeRow(c) {
     el('span', { class: 'chip mono', title: 'How sure the source is' },
       `${Math.round((c.confidence || 0) * 100)}%`),
     el('div', { class: 'racts' },
-      el('button', {
-        class: 'go sm', onclick: async () => {
-          await api('/changes/decide', { method: 'POST', body: { ids: [c.id], status: 'approved' } });
-          render(); poll();
-        },
-      }, 'Approve'),
+      reviewStatus === 'approved'
+        ? el('button', {
+            class: 'sm', onclick: async () => {
+              await api('/changes/decide', { method: 'POST', body: { ids: [c.id], status: 'pending' } });
+              render(); poll();
+            },
+          }, 'Undo')
+        : el('button', {
+            class: 'go sm', onclick: async () => {
+              await api('/changes/decide', { method: 'POST', body: { ids: [c.id], status: 'approved' } });
+              render(); poll();
+            },
+          }, 'Approve'),
       el('button', {
         class: 'sm', onclick: async () => {
           await api('/changes/decide', { method: 'POST', body: { ids: [c.id], status: 'rejected' } });

@@ -244,6 +244,27 @@ check("different discs never share a bucket",
       dupes._bucket({"album": "Box", "album_key": "x|box", "disc_no": 1, "folder": "/a"})
       != dupes._bucket({"album": "Box", "album_key": "x|box", "disc_no": 2, "folder": "/a"}),
       True)
+# --- approvals are reversible --------------------------------------------
+db.execute("DELETE FROM changes")
+_t = db.one("SELECT id FROM tracks WHERE missing=0")["id"]
+for _n in range(6):
+    db.execute("INSERT INTO changes(kind,track_id,field,new_value,source,confidence) "
+               "VALUES('tag',?,'year','1977','musicbrainz-album',0.95)", (_t,))
+check("approving moves them out of waiting",
+      changes.decide_group("tag", "year", "musicbrainz-album", "high", "approved"), 6)
+check("they are visible as approved", changes.counts()["approved"], 6)
+check("undo moves them back",
+      changes.decide_group("tag", "year", "musicbrainz-album", "high",
+                           "pending", from_status="approved"), 6)
+check("waiting again", changes.counts()["pending"], 6)
+
+_ids = [r["id"] for r in db.query("SELECT id FROM changes")]
+changes.set_status(_ids, "approved")
+db.execute("UPDATE changes SET status='applied'")
+changes.set_status(_ids, "pending")
+check("applied changes cannot be reversed", changes.counts()["applied"], 6)
+db.execute("DELETE FROM changes")
+
 from app.scanner import title_qualifier
 check("a featured artist is kept as a qualifier",
       title_qualifier("Idol (feat. Tech N9ne)"), "tech n9ne")

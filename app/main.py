@@ -320,11 +320,14 @@ def changes_grouped(status: str = "pending"):
 @api.post("/api/changes/decide-group")
 def decide_group(payload: dict = Body(...)):
     status = payload.get("status")
-    if status not in ("approved", "rejected"):
-        raise HTTPException(400, "status must be 'approved' or 'rejected'")
+    from_status = payload.get("from_status", "pending")
+    if status not in ("approved", "rejected", "pending"):
+        raise HTTPException(400, "status must be 'approved', 'rejected' or 'pending'")
+    if from_status not in ("pending", "approved", "rejected"):
+        raise HTTPException(400, "from_status must be a reversible status")
     n = changes.decide_group(
         payload["kind"], payload.get("field"), payload.get("source"),
-        payload.get("band", "all"), status,
+        payload.get("band", "all"), status, from_status,
     )
     return {"updated": n, "counts": changes.counts()}
 
@@ -340,9 +343,9 @@ def worker_stop():
 def decide(payload: dict = Body(...)):
     ids = payload.get("ids") or []
     status = payload.get("status")
-    if status not in ("approved", "rejected"):
-        raise HTTPException(400, "status must be 'approved' or 'rejected'")
-    return {"updated": changes.set_status(ids, status)}
+    if status not in ("approved", "rejected", "pending"):
+        raise HTTPException(400, "status must be 'approved', 'rejected' or 'pending'")
+    return {"updated": changes.set_status(ids, status), "counts": changes.counts()}
 
 
 @api.post("/api/changes/decide-all")
@@ -350,8 +353,9 @@ def decide_all(payload: dict = Body(default={})):
     kind = payload.get("kind")
     status = payload.get("status", "approved")
     min_conf = float(payload.get("min_confidence") or 0)
-    sql = "UPDATE changes SET status=? WHERE status='pending' AND confidence >= ?"
-    args: tuple = (status, min_conf)
+    from_status = payload.get("from_status", "pending")
+    sql = "UPDATE changes SET status=? WHERE status=? AND confidence >= ?"
+    args: tuple = (status, from_status, min_conf)
     if kind:
         sql += " AND kind=?"
         args += (kind,)

@@ -8,6 +8,13 @@ Forge does for video.
 **Nothing is written to your files until you approve it.** Every proposed edit,
 removal and conversion lands in the Review screen first.
 
+Review has three states — Waiting, Approved and Skipped — and everything moves
+freely between them. Approving is not a commitment: it collects work for the
+next Apply, and until you press Apply you can undo any of it, a whole group at
+a time or row by row. Approving a group asks first, and so does Apply, which is
+the only step that touches your files. Once something is applied it is final
+and cannot be moved back.
+
 ---
 
 ## The duplicate rule
