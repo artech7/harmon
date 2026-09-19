@@ -6,7 +6,7 @@ import threading
 import time
 from datetime import datetime, time as dtime
 
-from . import albums, changes, db, dupes, enrich, scanner, transcode
+from . import albums, changes, db, dupes, enrich, lyrics, scanner, transcode
 from .config import get as get_config
 
 _pipeline_lock = threading.Lock()
@@ -21,6 +21,8 @@ JOB_LABELS = {
     "enrich": "Looking up metadata",
     "apply": "Writing approved changes",
     "convert": "Converting files",
+    "lyrics_scan": "Checking what has lyrics",
+    "lyrics": "Looking up lyrics",
     "pipeline": "Full pass",
 }
 
@@ -178,6 +180,39 @@ def run_enrich(track_ids: list[int] | None = None) -> dict:
                     f"{staged} suggestions ready to review "
                     f"({album_result['albums']} albums, {len(leftovers)} single tracks)")
             return {"albums": album_result, "tracks": track_result, "staged": staged}
+        except Cancelled:
+            _finish(job, "cancelled", "Stopped at your request")
+            return {"cancelled": True}
+        except Exception as exc:
+            _finish(job, "failed", str(exc)[:300])
+            raise
+
+
+def run_lyrics_scan() -> dict:
+    with _pipeline_lock:
+        job = _start_job("lyrics_scan")
+        try:
+            counts = lyrics.scan(lambda p, m: _update(job, p, m))
+            _finish(job, "done",
+                    f"{counts['synced']} synced, {counts['unsynced']} plain, "
+                    f"{counts['none']} with none")
+            return counts
+        except Cancelled:
+            _finish(job, "cancelled", "Stopped at your request")
+            return {"cancelled": True}
+        except Exception as exc:
+            _finish(job, "failed", str(exc)[:300])
+            raise
+
+
+def run_lyrics(track_ids: list[int] | None = None, limit: int = 0) -> dict:
+    with _pipeline_lock:
+        job = _start_job("lyrics")
+        try:
+            result = lyrics.stage(track_ids, limit, lambda p, m: _update(job, p, m))
+            _finish(job, "done",
+                    f"{result['synced']} synced lyric files ready to review")
+            return result
         except Cancelled:
             _finish(job, "cancelled", "Stopped at your request")
             return {"cancelled": True}

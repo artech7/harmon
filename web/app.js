@@ -190,6 +190,7 @@ const TABS = {
   duplicates: viewDuplicates,
   folders: viewFolders,
   metadata: viewMetadata,
+  lyrics: viewLyrics,
   review: viewReview,
   settings: viewSettings,
 };
@@ -199,6 +200,7 @@ const SUBTITLE = {
   duplicates: 'copies of the same song',
   folders: 'browse the library as it sits on disk',
   metadata: 'artists, albums, genres, artwork',
+  lyrics: 'synced .lrc files, with plain text as backup',
   review: 'nothing is written until you approve it',
   settings: 'folders, sources, automation',
 };
@@ -307,6 +309,7 @@ function paint(s) {
   setProp('#btn-pipeline', 'disabled', busy);
 
   setProp('#badge-review', 'textContent', s.changes.pending || '');
+  setProp('#badge-lyrics', 'textContent', s.changes.by_kind?.lyrics || '');
   setProp('#badge-dupes', 'textContent',
     (s.duplicates.same_album || 0) + (s.duplicates.identical || 0) || '');
 
@@ -509,6 +512,98 @@ async function fillGroup(groupId, body) {
       el('span', { class: 'rmeta' },
         'Removed files move to your originals folder, not the bin. Byte-identical copies are read in full and compared before anything is deleted.')));
   }
+}
+
+/* --- lyrics ------------------------------------------------------------ */
+
+let lyricsState = 'none';
+
+async function viewLyrics() {
+  const cov = await api('/lyrics');
+  const frag = document.createDocumentFragment();
+
+  if (cov.unknown === cov.total && cov.total) {
+    frag.append(card('Check what you already have',
+      'Harmon has not looked for lyrics yet. This reads each track for a .lrc or .txt beside it, and for lyrics stored in the tags, so nothing already on disk gets downloaded twice.',
+      el('button', {
+        class: 'go', onclick: async () => {
+          await api('/run/lyrics_scan', { method: 'POST', body: {} });
+          toast('Checking every track for lyrics.'); poll();
+        },
+      }, 'Scan for lyrics')));
+    return frag;
+  }
+
+  const pct = (n) => cov.total ? Math.round((n / cov.total) * 100) : 0;
+  frag.append(el('div', { class: 'stats' },
+    stat('Synced', num(cov.synced), `${pct(cov.synced)}% — .lrc, scrolls in time`,
+      cov.synced ? 'good' : null),
+    stat('Plain text only', num(cov.unsynced), `${pct(cov.unsynced)}% — a .lrc would improve these`,
+      cov.unsynced ? 'hot' : null),
+    stat('No lyrics', num(cov.none), `${pct(cov.none)}% of the library`,
+      cov.none ? 'hot' : 'good'),
+    cov.unknown ? stat('Not checked', num(cov.unknown), 'run the scan again') : null));
+
+  frag.append(card('Fetch from LRCLIB',
+    'LRCLIB is a free, open lyrics database — no key, no account. Harmon matches on artist, title, album and length, so a radio edit does not get the album version\'s timings. Files are written next to each track and nothing touches the audio itself. Anything found is staged in Review first.',
+    el('div', { class: 'bar' },
+      el('button', {
+        class: 'go', disabled: !(cov.none + cov.unsynced),
+        onclick: async () => {
+          await api('/run/lyrics', { method: 'POST', body: {} });
+          toast('Looking up lyrics. This runs in the background — you can leave the page.');
+          poll();
+        },
+      }, `Look up ${num(cov.none + cov.unsynced)} tracks`),
+      el('button', {
+        class: 'sm', onclick: async () => {
+          await api('/run/lyrics', { method: 'POST', body: { limit: 50 } });
+          toast('Trying 50 tracks first.'); poll();
+        },
+      }, 'Try 50 first'),
+      el('button', {
+        class: 'sm', onclick: async () => {
+          await api('/run/lyrics_scan', { method: 'POST', body: {} });
+          toast('Re-checking what is on disk.'); poll();
+        },
+      }, 'Re-scan what I have'),
+      cov.staged ? chip(`${num(cov.staged)} waiting in Review`, 'wait') : null)));
+
+  const listHost = el('div', { class: 'rows' });
+  const tabs = el('div', { class: 'segs pills' },
+    [['none', 'No lyrics'], ['unsynced', 'Plain text only'], ['synced', 'Synced']]
+      .map(([key, label]) => el('button', {
+        class: 'sm' + (lyricsState === key ? ' on' : ''),
+        onclick: () => { lyricsState = key; render(); },
+      }, `${label} (${num(cov[key])})`)));
+
+  const data = await api(`/lyrics/tracks?state=${lyricsState}&limit=100`);
+  if (!data.items.length) {
+    listHost.append(el('div', { class: 'empty' }, 'Nothing in this group.'));
+  }
+  data.items.forEach((t) => listHost.append(
+    el('div', { class: 'row', style: 'grid-template-columns:1fr auto auto' },
+      el('div', {},
+        el('div', { class: 'rname' }, t.title || basename(t.path)),
+        el('div', { class: 'rmeta' },
+          [t.album_artist || t.artist, t.album].filter(Boolean).join(' — '))),
+      el('button', {
+        class: 'jump', onclick: () => openFolderFor(t.id),
+      }, 'Show folder'),
+      el('button', {
+        class: 'sm', onclick: async (e) => {
+          e.target.disabled = true;
+          e.target.textContent = 'Looking…';
+          await api('/run/lyrics', { method: 'POST', body: { track_ids: [t.id] } });
+          setTimeout(() => { toast('Checked. Anything found is in Review.'); poll(); }, 1200);
+        },
+      }, 'Look this one up'))));
+
+  frag.append(card('Tracks',
+    `Showing ${num(data.items.length)} of ${num(data.total)}.`,
+    el('div', { class: 'bar' }, tabs), listHost));
+
+  return frag;
 }
 
 /* --- folders ----------------------------------------------------------- */
@@ -940,6 +1035,11 @@ function describeGroup(g) {
   const allBlank = g.filling_blanks === g.n;
   const someBlank = g.filling_blanks > 0 && !allBlank;
 
+  if (g.kind === 'lyrics') {
+    return g.field === 'synced'
+      ? `Add synced lyrics (.lrc) to ${n} tracks`
+      : `Add plain lyrics (.txt) to ${n} tracks that have none`;
+  }
   if (g.kind === 'delete') return `Remove ${n} duplicate files`;
   if (g.kind === 'convert') return `Convert ${n} files to your target format`;
   if (g.kind === 'art') return `Embed artwork on ${n} tracks that have none`;
@@ -1185,7 +1285,8 @@ async function reviewFlat() {
   const filters = el('div', { class: 'bar' },
     el('div', { class: 'segs' },
       [[null, 'Everything'], ['tag', 'Tags'], ['art', 'Artwork'],
-       ['delete', 'Removals'], ['convert', 'Conversions']].map(([key, label]) =>
+       ['lyrics', 'Lyrics'], ['delete', 'Removals'],
+       ['convert', 'Conversions']].map(([key, label]) =>
         el('button', {
           class: 'sm' + (reviewKind === key ? ' on' : ''),
           onclick: () => { reviewKind = key; render(); },
@@ -1252,7 +1353,8 @@ async function decideSelected(status) {
 }
 
 function changeRow(c) {
-  const label = { tag: 'Tag', art: 'Artwork', delete: 'Remove file', convert: 'Convert' }[c.kind] || c.kind;
+  const label = { tag: 'Tag', art: 'Artwork', delete: 'Remove file',
+                  convert: 'Convert', lyrics: 'Lyrics' }[c.kind] || c.kind;
   let detail;
 
   if (c.kind === 'tag') {
@@ -1265,6 +1367,11 @@ function changeRow(c) {
     try { host = new URL(c.new_value).hostname; } catch { /* not a URL */ }
     detail = el('div', { class: 'diff' },
       el('em', {}, 'Embed a cover image'), el('span', { class: 'rmeta' }, host));
+  } else if (c.kind === 'lyrics') {
+    detail = el('div', { class: 'diff' },
+      el('em', {}, c.new_value),
+      el('span', { class: 'rmeta' },
+        c.old_value === 'unsynced' ? 'upgrading from plain text' : 'had none'));
   } else if (c.kind === 'delete') {
     detail = el('div', { class: 'diff' }, el('s', {}, c.old_value));
   } else {

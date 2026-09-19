@@ -16,7 +16,7 @@ from mutagen.flac import FLAC, Picture
 from mutagen.id3 import APIC, ID3, ID3NoHeaderError
 from mutagen.mp4 import MP4, MP4Cover
 
-from . import db, providers, scanner
+from . import db, lyrics, providers, scanner
 from .config import get as get_config
 
 EASY_KEYS = {
@@ -251,7 +251,8 @@ def apply_approved(progress=None) -> dict:
     rows = db.query(
         "SELECT c.*, t.path FROM changes c JOIN tracks t ON t.id=c.track_id "
         "WHERE c.status='approved' AND c.kind <> 'convert' ORDER BY "
-        "CASE c.kind WHEN 'tag' THEN 0 WHEN 'art' THEN 1 ELSE 2 END, c.track_id"
+        "CASE c.kind WHEN 'tag' THEN 0 WHEN 'art' THEN 1 "
+        "WHEN 'lyrics' THEN 2 ELSE 3 END, c.track_id"
     )
     result = {"applied": 0, "failed": 0, "touched": set()}
     min_px = get_config()["enrich"]["art_min_px"]
@@ -263,6 +264,8 @@ def apply_approved(progress=None) -> dict:
                 _write_tag(row["path"], row["field"], row["new_value"])
             elif row["kind"] == "art":
                 _embed_art(row["path"], row["new_value"], min_px)
+            elif row["kind"] == "lyrics":
+                lyrics.write_sidecar(row["track_id"], row["new_value"], row["payload"])
             elif row["kind"] == "delete":
                 _verify_identical(row["track_id"], row["path"])
                 _delete_file(row["path"])
@@ -274,7 +277,7 @@ def apply_approved(progress=None) -> dict:
                 "WHERE id=?", (row["id"],),
             )
             result["applied"] += 1
-            if row["kind"] != "delete":
+            if row["kind"] in ("tag", "art"):
                 result["touched"].add((row["path"], row["track_id"]))
         except Exception as exc:
             db.execute("UPDATE changes SET status='failed', error=? WHERE id=?",

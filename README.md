@@ -165,6 +165,36 @@ Fixing the names usually fixes the missing artist images on its own: media
 servers can match `3 Doors Down` against their own metadata sources, but not
 `3_Doors_Down`.
 
+## Lyrics
+
+Synced lyrics (`.lrc`, with timestamps) are what make a player scroll along
+with the song, and what Jellyfin, Navidrome and Subsonic clients look for.
+Plain text is a fallback worth keeping but not worth preferring.
+
+The Lyrics screen splits the library three ways: tracks with synced lyrics,
+tracks with plain text only, and tracks with none. Run the scan first — it
+looks for a `.lrc` or `.txt` beside each track *and* for lyrics stored in the
+audio tags, so anything you already have is not fetched again.
+
+Fetching uses [LRCLIB](https://lrclib.net), which is free and needs no key.
+Matching is on artist, title, album and duration, so a radio edit does not
+inherit the album version's timings.
+
+What gets written:
+
+- A `.lrc` whenever synced lyrics exist, including for tracks that already
+  have a `.txt` — that is an upgrade.
+- A `.txt` only when no synced version exists *and* the track has no lyrics at
+  all. Plain text is never written over plain text.
+- Sidecar files only. Harmon reads embedded lyrics but never writes them:
+  rewriting every audio file's tags means a full rescan in your media server,
+  and embedded synced lyrics are poorly supported anyway. A sidecar is
+  reversible by deleting it.
+- Existing `.txt` files are left where they are. Players prefer the `.lrc`
+  when both sit beside a track.
+
+Everything is staged in Review like any other change.
+
 ## Format standardization
 
 Pick a codec and bitrate on the Format screen. Harmon then:

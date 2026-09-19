@@ -59,6 +59,7 @@ CREATE TABLE IF NOT EXISTS tracks (
     standardized INTEGER DEFAULT 0,
     std_signature TEXT,
     folder       TEXT,
+    lyrics       TEXT,
     missing      INTEGER DEFAULT 0,
     scanned_at   TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -160,7 +161,8 @@ def init() -> None:
     conn.executescript(SCHEMA)
     # Lightweight forward migrations for stores created by an earlier version.
     have = {r["name"] for r in conn.execute("PRAGMA table_info(tracks)")}
-    for column, ddl in (("std_signature", "TEXT"), ("folder", "TEXT")):
+    for column, ddl in (("std_signature", "TEXT"), ("folder", "TEXT"),
+                        ("lyrics", "TEXT")):
         if column not in have:
             conn.execute(f"ALTER TABLE tracks ADD COLUMN {column} {ddl}")
             if column == "folder":

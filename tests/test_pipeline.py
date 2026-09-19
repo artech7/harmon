@@ -244,6 +244,47 @@ check("different discs never share a bucket",
       dupes._bucket({"album": "Box", "album_key": "x|box", "disc_no": 1, "folder": "/a"})
       != dupes._bucket({"album": "Box", "album_key": "x|box", "disc_no": 2, "folder": "/a"}),
       True)
+# --- lyrics ---------------------------------------------------------------
+from app import lyrics as _lyr
+_lf = os.path.join(LIB, "lyrictest")
+os.makedirs(_lf, exist_ok=True)
+for _n in ("a", "b", "c"):
+    make(f"{_lf}/{_n}.mp3", "libmp3lame", "192k", 4, 440)
+    tag(f"{_lf}/{_n}.mp3", title=_n.upper(), artist="Band", album="Album")
+open(f"{_lf}/a.lrc", "w").write("[00:01.00] placeholder\n")
+open(f"{_lf}/b.txt", "w").write("placeholder\n")
+scanner.scan()
+
+check("a .lrc counts as synced", _lyr.state_for(f"{_lf}/a.mp3"), "synced")
+check("a .txt counts as plain text", _lyr.state_for(f"{_lf}/b.mp3"), "unsynced")
+check("neither counts as none", _lyr.state_for(f"{_lf}/c.mp3"), "none")
+check("the sidecar name follows the track",
+      os.path.basename(_lyr.sidecar(f"{_lf}/c.mp3", ".lrc")), "c.lrc")
+
+_counts = _lyr.scan()
+check("the scan finds all three states",
+      (_counts["synced"] >= 1, _counts["unsynced"] >= 1, _counts["none"] >= 1),
+      (True, True, True))
+
+_orig_lookup = _lyr.lookup
+_lyr.lookup = lambda t: ({"kind": "synced", "ext": ".lrc", "body": "[00:02.00] placeholder\n"}
+                         if t["title"] in ("B", "C") else None)
+_ids = [r["id"] for r in db.query("SELECT id FROM tracks WHERE folder=?", (_lf,))]
+_res = _lyr.stage(_ids)
+check("tracks that already have a .lrc are not asked about", _res["checked"], 3)
+check("synced lyrics staged for the other two", _res["synced"], 2)
+check("nothing written yet", os.path.exists(f"{_lf}/c.lrc"), False)
+
+db.execute("UPDATE changes SET status='approved' WHERE kind='lyrics'")
+_applied = changes.apply_approved()
+check("the sidecars were written", os.path.exists(f"{_lf}/c.lrc"), True)
+check("the existing .txt was left alone", os.path.exists(f"{_lf}/b.txt"), True)
+check("and now has a .lrc beside it", os.path.exists(f"{_lf}/b.lrc"), True)
+check("the audio file was not rewritten",
+      _lyr.state_for(f"{_lf}/c.mp3"), "synced")
+_lyr.lookup = _orig_lookup
+db.execute("DELETE FROM changes")
+
 # --- genre vocabulary -----------------------------------------------------
 from app import genrebook as gb
 check("spelling variants converge", {gb.canonicalize(t) for t in

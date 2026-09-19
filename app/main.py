@@ -10,7 +10,7 @@ from fastapi import Body, FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from . import albums, browse, changes, config, db, dupes, enrich, genrebook, genres, hygiene, netcheck, providers, scanner, transcode, worker
+from . import albums, browse, changes, config, db, dupes, enrich, genrebook, genres, hygiene, lyrics, netcheck, providers, scanner, transcode, worker
 
 WEB_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "web")
 
@@ -199,6 +199,9 @@ def run(task: str, payload: dict = Body(default={})):
         "enrich": lambda: worker.run_enrich(payload.get("track_ids")),
         "apply": worker.run_apply,
         "convert": worker.run_conversions,
+        "lyrics_scan": worker.run_lyrics_scan,
+        "lyrics": lambda: worker.run_lyrics(payload.get("track_ids"),
+                                            int(payload.get("limit") or 0)),
         "pipeline": worker.run_pipeline,
     }
     fn = tasks.get(task)
@@ -249,6 +252,25 @@ def stage_all_dupes():
 def change_list(status: str = "pending", kind: str | None = None,
                 limit: int = 300, offset: int = 0):
     return {"counts": changes.counts(), "items": changes.listing(status, kind, limit, offset)}
+
+
+@api.get("/api/lyrics")
+def lyrics_coverage():
+    return lyrics.coverage()
+
+
+@api.get("/api/lyrics/tracks")
+def lyrics_tracks(state: str = "none", limit: int = 100, offset: int = 0):
+    rows = db.query(
+        "SELECT id, path, folder, title, artist, album_artist, album, duration, lyrics "
+        "FROM tracks WHERE missing=0 AND COALESCE(lyrics,'unknown') = ? "
+        "ORDER BY album_artist, album, disc_no, track_no LIMIT ? OFFSET ?",
+        (state, limit, offset),
+    )
+    total = db.one(
+        "SELECT COUNT(*) AS n FROM tracks WHERE missing=0 "
+        "AND COALESCE(lyrics,'unknown') = ?", (state,))["n"]
+    return {"total": total, "items": db.rows_to_dicts(rows)}
 
 
 @api.get("/api/genres")
