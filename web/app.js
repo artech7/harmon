@@ -39,7 +39,22 @@ async function api(path, options = {}) {
     body: options.body ? JSON.stringify(options.body) : undefined,
   });
   const text = await res.text();
-  const data = text ? JSON.parse(text) : null;
+
+  // A static-file mount answers an unknown path with the page itself. Saying
+  // "Unexpected token '<'" tells you nothing; saying the build is out of date
+  // tells you exactly what to do.
+  if (text.trimStart().startsWith('<')) {
+    throw new Error(
+      `The server has no ${path} endpoint. The page and the running build are ` +
+      `different versions — redeploy, then reload.`);
+  }
+
+  let data = null;
+  try {
+    data = text ? JSON.parse(text) : null;
+  } catch {
+    throw new Error(`${path} returned something that is not JSON.`);
+  }
   if (!res.ok) throw new Error(data?.detail || res.statusText);
   return data;
 }
@@ -1440,6 +1455,16 @@ async function viewSettings() {
       }, label)))));
 
   const show = (name) => settingsSection === name;
+
+  if (show('library')) {
+    const buildLine = el('div', { class: 'rmeta' }, 'Checking…');
+    api('/version').then((v) => {
+      buildLine.textContent = `Harmon ${v.version}, build ${v.build}, ${v.routes.length} endpoints`;
+    }).catch((e) => { buildLine.textContent = e.message; });
+    frag.append(card('What is running',
+      'If the page and the server disagree about which endpoints exist, the build did not fully deploy.',
+      buildLine));
+  }
   if (show('format')) frag.append(await formatSettingsCard());
 
   const save = async (patch, again = false) => {

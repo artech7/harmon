@@ -505,6 +505,36 @@ def _asset_version() -> str:
     return str(int(newest))
 
 
+@api.get("/api/version")
+def version():
+    """What is actually running, so a mismatched deploy can be seen."""
+    from . import __version__
+    return {
+        "version": __version__,
+        "build": _asset_version(),
+        "routes": sorted({
+            r.path for r in api.routes
+            if getattr(r, "path", "").startswith("/api/")
+        }),
+    }
+
+
+@api.api_route("/api/{rest:path}", methods=["GET", "POST", "PUT", "DELETE"],
+               include_in_schema=False)
+def api_not_found(rest: str):
+    """Anything under /api that does not exist answers in JSON.
+
+    Without this the static mount serves index.html for an unknown API path,
+    and the front end reports "Unexpected token '<'" — which says nothing
+    about the actual problem, that the running build is missing the route.
+    """
+    raise HTTPException(
+        404,
+        f"No such endpoint: /api/{rest}. The running build does not have it — "
+        f"the server and the page are from different versions.",
+    )
+
+
 @api.get("/")
 def index():
     with open(os.path.join(WEB_DIR, "index.html")) as f:
