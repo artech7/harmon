@@ -789,10 +789,44 @@ async function viewMetadata() {
         const pick = el('select', {},
           el('option', { value: '' }, 'Send this to…'),
           d.vocabulary.map((g) => el('option', { value: g }, g)));
-        rows.append(el('div', { class: 'row', style: 'grid-template-columns:1fr auto auto auto' },
-          el('div', {},
+
+        // Who carries this tag is the thing that tells you where it belongs,
+        // so it has to be visible before you decide, not after.
+        const inside = el('div', { class: 'gbody', style: 'display:none' });
+        let loaded = false;
+        const reveal = async () => {
+          const open = inside.style.display !== 'none';
+          inside.style.display = open ? 'none' : 'flex';
+          if (open || loaded) return;
+          loaded = true;
+          inside.innerHTML = '';
+          inside.append(el('div', { class: 'empty' }, 'Loading…'));
+          const detail = await api('/genres/tracks?value=' + encodeURIComponent(u.value));
+          inside.innerHTML = '';
+          inside.append(el('div', { class: 'bar', style: 'margin:0 0 4px' },
+            ...detail.artists.map((a) => chip(`${a.artist} · ${num(a.tracks)}`))));
+          detail.tracks.forEach((t) => inside.append(
+            el('div', { class: 'copy', style: 'grid-template-columns:1fr auto' },
+              el('div', {},
+                el('div', { class: 'rname' }, t.title || basename(t.path)),
+                el('div', { class: 'rmeta' },
+                  [t.album_artist || t.artist, t.album].filter(Boolean).join(' — '))),
+              el('button', {
+                class: 'jump', onclick: () => openFolderFor(t.id),
+              }, 'Show folder'))));
+          if (detail.total > detail.tracks.length) {
+            inside.append(el('div', { class: 'rmeta', style: 'padding:6px 2px' },
+              `${num(detail.total - detail.tracks.length)} more not shown.`));
+          }
+        };
+
+        rows.append(el('div', {},
+          el('div', { class: 'row', style: 'grid-template-columns:1fr auto auto auto auto' },
+          el('div', { style: 'cursor:pointer', onclick: reveal },
             el('div', { class: 'rname' }, u.value),
-            el('div', { class: 'rmeta' }, `${num(u.tracks)} tracks, ${num(u.artists)} artists`)),
+            el('div', { class: 'rmeta' },
+              `${num(u.tracks)} tracks, ${num(u.artists)} artists — tap to see them`)),
+          el('button', { class: 'sm', onclick: reveal }, 'Show'),
           pick,
           el('button', {
             class: 'sm', onclick: async () => {
@@ -808,7 +842,8 @@ async function viewMetadata() {
               toast(`${u.value} is now one of your genres.`);
               paintGenres();
             },
-          }, 'Keep as its own')));
+          }, 'Keep as its own')),
+          inside));
       });
       genreBook.append(card('Genres Harmon cannot place',
         'These are not on the list. Send each one to a genre you already have, or keep it as a genre of its own.',
@@ -820,6 +855,45 @@ async function viewMetadata() {
       `${num(d.vocabulary.length)} genres. Everything gets mapped onto one of these, and one genre is written per artist — writing several per track is what turns a short list into hundreds of one-offs.`,
       el('div', { class: 'bar' },
         d.after.map((a) => chip(`${a.genre} · ${num(a.tracks)}`, 'good'))),
+      el('details', { style: 'margin-top:14px' },
+        el('summary', { class: 'rmeta', style: 'cursor:pointer' },
+          `Every value currently in your library (${num(d.items.length)})`),
+        el('div', { class: 'rows', style: 'margin-top:8px' },
+          d.items.map((it) => {
+            const inside = el('div', { class: 'gbody', style: 'display:none' });
+            let loaded = false;
+            const reveal = async () => {
+              const open = inside.style.display !== 'none';
+              inside.style.display = open ? 'none' : 'flex';
+              if (open || loaded) return;
+              loaded = true;
+              inside.append(el('div', { class: 'empty' }, 'Loading…'));
+              const detail = await api('/genres/tracks?value=' + encodeURIComponent(it.value));
+              inside.innerHTML = '';
+              inside.append(el('div', { class: 'bar', style: 'margin:0' },
+                ...detail.artists.map((a) => chip(`${a.artist} · ${num(a.tracks)}`))));
+              detail.tracks.slice(0, 20).forEach((t) => inside.append(
+                el('div', { class: 'copy', style: 'grid-template-columns:1fr auto' },
+                  el('div', {},
+                    el('div', { class: 'rname' }, t.title || basename(t.path)),
+                    el('div', { class: 'rmeta' },
+                      [t.album_artist || t.artist, t.album].filter(Boolean).join(' — '))),
+                  el('button', { class: 'jump', onclick: () => openFolderFor(t.id) },
+                    'Show folder'))));
+            };
+            return el('div', {},
+              el('div', { class: 'row', style: 'grid-template-columns:1fr auto auto;cursor:pointer',
+                          onclick: reveal },
+                el('div', {},
+                  el('div', { class: 'rname' }, it.value),
+                  el('div', { class: 'rmeta' },
+                    it.becomes && it.becomes !== it.value
+                      ? `becomes ${it.becomes}`
+                      : it.becomes ? 'already on your list' : 'cannot be placed')),
+                chip(`${num(it.tracks)} tracks`),
+                chip(`${num(it.artists)} artists`)),
+              inside);
+          }))),
       el('div', { class: 'grid2', style: 'margin-top:16px' },
         el('div', { class: 'field' },
           el('label', {}, 'Add a genre of your own'),

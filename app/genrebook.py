@@ -265,3 +265,33 @@ def stage_cleanup(only_mapped: bool = True) -> dict:
         db.log(f"Genre cleanup staged {staged} changes; "
                f"{skipped} values could not be placed on the list")
     return {"staged": staged, "unplaced": skipped}
+
+
+def tracks_for(value: str, limit: int = 60) -> dict:
+    """Who and what carries one genre value.
+
+    A count alone does not tell you where a stray tag belongs. Seeing that
+    "Sea Shanty" is four artists you recognise as folk does.
+    """
+    artists = db.query(
+        "SELECT COALESCE(album_artist, artist) AS artist, COUNT(*) AS tracks "
+        "FROM tracks WHERE missing=0 AND genre=? "
+        "GROUP BY artist ORDER BY tracks DESC LIMIT 40",
+        (value,),
+    )
+    tracks = db.query(
+        "SELECT id, title, artist, album_artist, album, path, folder "
+        "FROM tracks WHERE missing=0 AND genre=? "
+        "ORDER BY album_artist, album, disc_no, track_no LIMIT ?",
+        (value, limit),
+    )
+    total = db.one("SELECT COUNT(*) AS n FROM tracks WHERE missing=0 AND genre=?",
+                   (value,))["n"]
+    return {
+        "value": value,
+        "total": total,
+        "becomes": (canonicalize_all([p.strip() for p in value.split(";") if p.strip()],
+                                     limit=1) or [None])[0],
+        "artists": db.rows_to_dicts(artists),
+        "tracks": db.rows_to_dicts(tracks),
+    }

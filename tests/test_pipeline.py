@@ -297,6 +297,16 @@ check("your mapping places it", gb.canonicalize("sea shanty"), "Folk")
 gb.add_custom("Polka")
 check("your own genre is recognised", gb.canonicalize("polka"), "Polka")
 check("your genres join the vocabulary", "Polka" in gb.vocabulary(), True)
+
+# A stray tag can only be judged by seeing who carries it.
+db.execute("UPDATE tracks SET genre='Sea Shanty' WHERE id IN "
+           "(SELECT id FROM tracks WHERE missing=0 LIMIT 2)")
+_d = gb.tracks_for("Sea Shanty")
+check("a genre value lists its artists", len(_d["artists"]) >= 1, True)
+check("and its tracks", len(_d["tracks"]) >= 1, True)
+check("each track carries an id to jump from",
+      all("id" in t for t in _d["tracks"]), True)
+check("the total is reported", _d["total"], 2)
 gb.remove_custom("Polka")
 check("removing it takes it back out", gb.canonicalize("polka"), None)
 

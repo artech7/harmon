@@ -278,6 +278,11 @@ def genres_overview():
     return genrebook.distribution()
 
 
+@api.get("/api/genres/tracks")
+def genres_tracks(value: str, limit: int = 60):
+    return genrebook.tracks_for(value, limit)
+
+
 @api.post("/api/genres/custom")
 def genres_add_custom(payload: dict = Body(...)):
     name = (payload.get("name") or "").strip()
