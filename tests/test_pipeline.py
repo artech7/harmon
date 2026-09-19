@@ -244,6 +244,26 @@ check("different discs never share a bucket",
       dupes._bucket({"album": "Box", "album_key": "x|box", "disc_no": 1, "folder": "/a"})
       != dupes._bucket({"album": "Box", "album_key": "x|box", "disc_no": 2, "folder": "/a"}),
       True)
+# --- genre vocabulary -----------------------------------------------------
+from app import genrebook as gb
+check("spelling variants converge", {gb.canonicalize(t) for t in
+      ("nu-metal", "Nu Metal", "NUMETAL", "nu metal")}, {"Nu Metal"})
+check("a longer match wins over a broader one",
+      gb.canonicalize("melodic doom metal"), "Doom Metal")
+check("an unknown genre is not guessed at", gb.canonicalize("Sea Shanty"), None)
+gb.add_mapping("Sea Shanty", "Folk")
+check("your mapping places it", gb.canonicalize("sea shanty"), "Folk")
+gb.add_custom("Polka")
+check("your own genre is recognised", gb.canonicalize("polka"), "Polka")
+check("your genres join the vocabulary", "Polka" in gb.vocabulary(), True)
+gb.remove_custom("Polka")
+check("removing it takes it back out", gb.canonicalize("polka"), None)
+
+check("genre keys on the performing artist, not the album artist",
+      genres.artist_key({"artist": "Hollywood Undead feat. Tech N9ne",
+                         "album_artist": "Various Artists"}),
+      "hollywood undead")
+
 # --- approvals are reversible --------------------------------------------
 db.execute("DELETE FROM changes")
 _t = db.one("SELECT id FROM tracks WHERE missing=0")["id"]

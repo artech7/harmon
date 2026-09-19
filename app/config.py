@@ -105,6 +105,7 @@ DEFAULTS: dict[str, Any] = {
     "enrich": {
         "fields": {f: True for f in ENRICH_FIELDS},
         "embed_art": True,
+        "genres_per_track": 1,
         "art_min_px": 600,
         "min_confidence": 0.82,
         "overwrite_existing": False,  # only fill blanks unless confidence is high

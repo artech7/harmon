@@ -658,18 +658,97 @@ async function viewMetadata() {
         el('b', {}, 'Every track has what it needs'),
         'Artist, album, genre and artwork are all filled in.');
 
-  const genreCard = card('Genres look wrong?',
-    'Genres are decided by agreement between Last.fm, Discogs and Spotify, filtered to tags that are actually genres, and settled once per artist rather than per track. If you have genres staged from before that was true, clear them and run the lookup again.',
-    el('div', { class: 'bar' },
+  const genreBook = el('div', {});
+  async function paintGenres() {
+    genreBook.innerHTML = '';
+    genreBook.append(el('div', { class: 'empty' }, 'Reading your genres…'));
+    const d = await api('/genres');
+    genreBook.innerHTML = '';
+
+    genreBook.append(el('div', { class: 'stats' },
+      stat('Genres in use', num(d.distinct),
+        `${num(d.one_offs)} used by a single track`, d.one_offs ? 'hot' : null),
+      stat('After tidying', num(d.after.length), 'from your list', 'good'),
+      stat('Cannot be placed', num(d.unmapped.length),
+        d.unmapped.length ? 'these need you' : 'nothing left over',
+        d.unmapped.length ? 'hot' : 'good')));
+
+    if (d.unmapped.length) {
+      const rows = el('div', { class: 'rows' });
+      d.unmapped.slice(0, 40).forEach((u) => {
+        const pick = el('select', {},
+          el('option', { value: '' }, 'Send this to…'),
+          d.vocabulary.map((g) => el('option', { value: g }, g)));
+        rows.append(el('div', { class: 'row', style: 'grid-template-columns:1fr auto auto auto' },
+          el('div', {},
+            el('div', { class: 'rname' }, u.value),
+            el('div', { class: 'rmeta' }, `${num(u.tracks)} tracks, ${num(u.artists)} artists`)),
+          pick,
+          el('button', {
+            class: 'sm', onclick: async () => {
+              if (!pick.value) { toast('Pick a genre to send it to first.'); return; }
+              await api('/genres/map', { method: 'POST', body: { from: u.value, to: pick.value } });
+              toast(`${u.value} now becomes ${pick.value}.`);
+              paintGenres();
+            },
+          }, 'Map it'),
+          el('button', {
+            class: 'sm', onclick: async () => {
+              await api('/genres/custom', { method: 'POST', body: { name: u.value } });
+              toast(`${u.value} is now one of your genres.`);
+              paintGenres();
+            },
+          }, 'Keep as its own')));
+      });
+      genreBook.append(card('Genres Harmon cannot place',
+        'These are not on the list. Send each one to a genre you already have, or keep it as a genre of its own.',
+        rows));
+    }
+
+    const newGenre = el('input', { type: 'text', placeholder: 'Shoegaze Revival' });
+    genreBook.append(card('Your list',
+      `${num(d.vocabulary.length)} genres. Everything gets mapped onto one of these, and one genre is written per artist — writing several per track is what turns a short list into hundreds of one-offs.`,
+      el('div', { class: 'bar' },
+        d.after.map((a) => chip(`${a.genre} · ${num(a.tracks)}`, 'good'))),
+      el('div', { class: 'grid2', style: 'margin-top:16px' },
+        el('div', { class: 'field' },
+          el('label', {}, 'Add a genre of your own'),
+          newGenre,
+          el('small', {}, 'Yours take priority over the built-in list.'))),
       el('button', {
-        class: 'warn', onclick: async (e) => {
-          e.target.disabled = true;
-          const r = await api('/genres/reset', { method: 'POST', body: {} });
-          toast(`Cleared ${num(r.staged_cleared)} staged genres and ${num(r.cached_cleared)} cached artists.`);
-          render(); poll();
+        class: 'sm', onclick: async () => {
+          if (!newGenre.value.trim()) return;
+          await api('/genres/custom', { method: 'POST', body: { name: newGenre.value } });
+          toast(`Added ${newGenre.value.trim()}.`);
+          paintGenres();
         },
-      }, 'Clear genres and start over'),
-      el('span', { class: 'rmeta' }, 'Only affects genre. Nothing already written to your files changes.')));
+      }, 'Add it')));
+
+    genreBook.append(card('Tidy up what you have',
+      'Reads the genres already on your files, puts each onto your list, and stages the differences in Review. Values that cannot be placed are left alone rather than guessed at.',
+      el('div', { class: 'bar' },
+        el('button', {
+          class: 'go', onclick: async () => {
+            const r = await api('/genres/cleanup', { method: 'POST', body: {} });
+            toast(`${num(r.staged)} genre changes staged` +
+                  (r.unplaced ? `, ${num(r.unplaced)} left alone.` : '.'));
+            paintGenres(); poll();
+          },
+        }, 'Stage the cleanup'),
+        el('button', {
+          class: 'warn sm', onclick: async () => {
+            if (!confirm('Clear cached genres and any staged genre changes, so the next lookup starts fresh?')) return;
+            const r = await api('/genres/reset', { method: 'POST', body: {} });
+            toast(`Cleared ${num(r.staged_cleared)} staged and ${num(r.cached_cleared)} cached.`);
+            paintGenres(); poll();
+          },
+        }, 'Start genres over'))));
+  }
+  paintGenres();
+
+  const genreCard = card('Genres',
+    'One genre per artist, drawn from a fixed list. Sources disagree about spelling and specificity, so everything they return gets mapped onto your list before it is written.',
+    genreBook);
 
   const hygieneOut = el('div', {});
   let allowComma = false;

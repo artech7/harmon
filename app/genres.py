@@ -124,8 +124,17 @@ def vote(candidates: list[dict]) -> tuple[list[str], float]:
 
 
 def artist_key(track: dict) -> str:
+    """Whose genre this is.
+
+    The performing artist, with guests dropped — not the album artist. On a
+    compilation the album artist is "Various Artists", and keying on that
+    would give every track on the record one genre.
+    """
+    from .hygiene import split_credit
     from .scanner import normalize
-    return normalize(track.get("album_artist") or track.get("artist") or "")
+    credit = track.get("artist") or track.get("album_artist") or ""
+    parts = split_credit(credit)
+    return normalize(parts[0] if parts else credit)
 
 
 def cached_for_artist(key: str) -> dict | None:
@@ -179,6 +188,14 @@ def resolve(track: dict, results: list[dict]) -> tuple[str | None, float]:
             })
 
     genres, confidence = vote(candidates)
+
+    # One genre, from the agreed vocabulary. Writing several per track is what
+    # turns forty genres into thousands of distinct values.
+    from . import genrebook
+    from .config import get as _cfg
+    limit = int(_cfg()["enrich"].get("genres_per_track") or 1)
+    genres = genrebook.canonicalize_all(genres, limit=limit)
+
     if key and genres:
         cache_for_artist(key, genres, confidence)
     return ("; ".join(genres) or None), confidence

@@ -10,7 +10,7 @@ from fastapi import Body, FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from . import albums, browse, changes, config, db, dupes, enrich, genres, hygiene, netcheck, providers, scanner, transcode, worker
+from . import albums, browse, changes, config, db, dupes, enrich, genrebook, genres, hygiene, netcheck, providers, scanner, transcode, worker
 
 WEB_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "web")
 
@@ -249,6 +249,44 @@ def stage_all_dupes():
 def change_list(status: str = "pending", kind: str | None = None,
                 limit: int = 300, offset: int = 0):
     return {"counts": changes.counts(), "items": changes.listing(status, kind, limit, offset)}
+
+
+@api.get("/api/genres")
+def genres_overview():
+    return genrebook.distribution()
+
+
+@api.post("/api/genres/custom")
+def genres_add_custom(payload: dict = Body(...)):
+    name = (payload.get("name") or "").strip()
+    if not name:
+        raise HTTPException(400, "A name is required")
+    return genrebook.add_custom(name)
+
+
+@api.delete("/api/genres/custom/{name}")
+def genres_remove_custom(name: str):
+    return genrebook.remove_custom(name)
+
+
+@api.post("/api/genres/map")
+def genres_map(payload: dict = Body(...)):
+    source = (payload.get("from") or "").strip()
+    target = (payload.get("to") or "").strip()
+    if not source:
+        raise HTTPException(400, "Nothing to map")
+    if not target:
+        return genrebook.remove_mapping(source)
+    if target not in genrebook.vocabulary():
+        raise HTTPException(400, f"{target!r} is not one of your genres")
+    return genrebook.add_mapping(source, target)
+
+
+@api.post("/api/genres/cleanup")
+def genres_cleanup():
+    if worker.busy():
+        raise HTTPException(409, "Harmon is busy right now")
+    return genrebook.stage_cleanup()
 
 
 @api.post("/api/genres/reset")

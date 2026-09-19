@@ -104,8 +104,31 @@ hundred GB and a few hours to import.
 
 ### Genres
 
-Genre is the field most likely to be wrong, so it is handled separately from
-the rest. Harmon filters out tags that are not genres (`seen live`, `00s`,
+One genre per artist, drawn from a fixed vocabulary of about 70, with
+everything mapped onto it. Three things cause a library to sprout hundreds of
+one-off genres, and all three are handled here:
+
+- Sources spell things differently: `Nu Metal`, `nu-metal`, `NUMETAL`.
+- They disagree about specificity: `Djent` lands on `Progressive Metal`,
+  `Melodic Death Metal` on `Death Metal`.
+- Writing several genres per track multiplies the distinct values — three from
+  a pool of forty gives thousands of possible strings. So Harmon writes one.
+
+The Metadata screen shows every genre value in your library, how many are
+one-offs, and what each would become. Anything the vocabulary cannot place is
+listed separately, never guessed at: send it to a genre you already have, or
+keep it as a genre of its own. Your genres and mappings take priority over the
+built-in ones.
+
+**Tidy up what you have** reads the genres already on your files and stages the
+differences in Review. After that, everything Harmon proposes passes through
+the same list, so it stays tidy.
+
+Genre is keyed on the *performing* artist with guests dropped, not the album
+artist — on a compilation the album artist is "Various Artists", and keying on
+that would hand every track on the record one genre.
+
+The rest of how genre is decided: Harmon filters out tags that are not genres (`seen live`, `00s`,
 `american`, `female vocalists`), decides by agreement between the sources
 rather than taking whichever answered first, and settles it once per artist so
 a band cannot end up spread across four genres. A single unsupported answer
