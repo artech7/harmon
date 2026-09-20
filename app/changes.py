@@ -19,6 +19,10 @@ from mutagen.mp4 import MP4, MP4Cover
 from . import db, lyrics, providers, scanner
 from .config import get as get_config
 
+# Fields that map straight onto a column in the tracks table.
+TRACK_COLUMNS = {"artist", "album_artist", "album", "title", "genre", "year",
+                 "track_no", "disc_no"}
+
 EASY_KEYS = {
     "artist": "artist",
     "album_artist": "albumartist",
@@ -254,7 +258,7 @@ def apply_approved(progress=None) -> dict:
         "CASE c.kind WHEN 'tag' THEN 0 WHEN 'art' THEN 1 "
         "WHEN 'lyrics' THEN 2 ELSE 3 END, c.track_id"
     )
-    result = {"applied": 0, "failed": 0, "touched": set()}
+    result = {"applied": 0, "failed": 0, "touched": set(), "rekey": set()}
     min_px = get_config()["enrich"]["art_min_px"]
     total = max(len(rows), 1)
 
@@ -277,8 +281,25 @@ def apply_approved(progress=None) -> dict:
                 "WHERE id=?", (row["id"],),
             )
             result["applied"] += 1
-            if row["kind"] in ("tag", "art"):
-                result["touched"].add((row["path"], row["track_id"]))
+
+            # Keep the database current without re-reading the file. Harmon
+            # just wrote this value, so it already knows the answer; going
+            # back to disk for 15,000 files means a full tag parse and a
+            # 512 KB read each, which is tens of minutes over a NAS share for
+            # information it already has.
+            #
+            # mtime and size are deliberately left stale. The next scan sees
+            # they no longer match the file and re-reads it properly, which is
+            # where the content hash gets refreshed — off the critical path.
+            if row["kind"] == "tag" and row["field"] in TRACK_COLUMNS:
+                db.execute(
+                    f"UPDATE tracks SET {row['field']}=? WHERE id=?",
+                    (row["new_value"], row["track_id"]),
+                )
+                if row["field"] in ("artist", "album_artist", "album", "title"):
+                    result["rekey"].add(row["track_id"])
+            elif row["kind"] == "art":
+                db.execute("UPDATE tracks SET has_art=1 WHERE id=?", (row["track_id"],))
         except Exception as exc:
             db.execute("UPDATE changes SET status='failed', error=? WHERE id=?",
                        (str(exc)[:400], row["id"]))
@@ -286,13 +307,23 @@ def apply_approved(progress=None) -> dict:
         if progress:
             progress((i + 1) / total, f"Applied {i + 1} of {len(rows)} changes")
 
-    for path, _tid in result["touched"]:
-        try:
-            scanner.index_file(path, force=True)
-        except Exception:
-            pass
+    # The comparison keys are derived from the tags, so anything whose name
+    # fields changed needs them rebuilt. This is arithmetic on values already
+    # in the database, not disk access.
+    for track_id in result["rekey"]:
+        row = db.one("SELECT artist, album_artist, album, title FROM tracks WHERE id=?",
+                     (track_id,))
+        if not row:
+            continue
+        artist_key = scanner.normalize(row["album_artist"] or row["artist"])
+        db.execute(
+            "UPDATE tracks SET norm_key=?, album_key=? WHERE id=?",
+            (f"{artist_key}|{scanner.normalize(row['title'])}",
+             f"{artist_key}|{scanner.normalize(row['album'])}", track_id),
+        )
 
-    result["touched"] = len(result["touched"])
+    result["touched"] = len(result["rekey"])
+    result.pop("rekey", None)
     db.log(f"Applied {result['applied']} changes, {result['failed']} failed")
     return result
 

@@ -245,6 +245,25 @@ check("different discs never share a bucket",
       dupes._bucket({"album": "Box", "album_key": "x|box", "disc_no": 1, "folder": "/a"})
       != dupes._bucket({"album": "Box", "album_key": "x|box", "disc_no": 2, "folder": "/a"}),
       True)
+# --- applying updates the database without re-reading files ---------------
+db.execute("DELETE FROM changes")
+_at = db.one("SELECT id, path FROM tracks WHERE missing=0 AND genre IS NOT NULL "
+             "OR missing=0 LIMIT 1")
+db.execute("UPDATE tracks SET genre='Rock', artist='Old Name' WHERE id=?", (_at["id"],))
+for _field, _new in (("genre", "Nu Metal"), ("artist", "New Name")):
+    db.execute("INSERT INTO changes(kind,track_id,field,old_value,new_value,source,"
+               "confidence,status) VALUES('tag',?,?,?,?,'test',0.9,'approved')",
+               (_at["id"], _field, "old", _new))
+_before_mtime = db.one("SELECT mtime FROM tracks WHERE id=?", (_at["id"],))["mtime"]
+changes.apply_approved()
+_after = db.one("SELECT genre, artist, norm_key, mtime FROM tracks WHERE id=?", (_at["id"],))
+check("the row reflects the write immediately", _after["genre"], "Nu Metal")
+check("without a re-read", _after["artist"], "New Name")
+check("comparison keys are rebuilt", _after["norm_key"].startswith("new name|"), True)
+check("mtime is left stale so the next scan refreshes the hash",
+      _after["mtime"], _before_mtime)
+db.execute("DELETE FROM changes")
+
 # --- lyrics ---------------------------------------------------------------
 from app import lyrics as _lyr
 _lf = os.path.join(LIB, "lyrictest")
