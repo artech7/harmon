@@ -590,7 +590,8 @@ async function viewLyrics() {
         class: 'go', disabled: !(cov.none + cov.unsynced),
         onclick: async () => {
           await api('/run/lyrics', { method: 'POST', body: {} });
-          toast('Looking up lyrics. This runs in the background — you can leave the page.');
+          toast('Looking up lyrics. This runs in the background — you can leave the page. ' +
+                'If LRCLIB is having a bad day it stops early and picks up next time.');
           poll();
         },
       }, `Look up ${num(cov.none + cov.unsynced)} tracks`),

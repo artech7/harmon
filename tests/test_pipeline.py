@@ -256,6 +256,8 @@ open(f"{_lf}/a.lrc", "w").write("[00:01.00] placeholder\n")
 open(f"{_lf}/b.txt", "w").write("placeholder\n")
 scanner.scan()
 
+check("a service outage is its own kind of failure",
+      issubclass(_lyr.ServiceUnavailable, RuntimeError), True)
 check("LRCLIB pacing sits inside their 200-500ms guidance",
       0.2 <= _lyr.MIN_INTERVAL <= 0.5, True)
 check("a .lrc counts as synced", _lyr.state_for(f"{_lf}/a.mp3"), "synced")

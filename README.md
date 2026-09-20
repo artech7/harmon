@@ -194,9 +194,12 @@ audio tags, so anything you already have is not fetched again.
 Fetching uses [LRCLIB](https://lrclib.net), which is free and needs no key.
 They ask for sequential requests with a 200–500ms gap, so Harmon sends one at
 a time and waits 300ms after each response before the next — a real gap rather
-than one overlapping the request's own duration. A 429 is honoured, including
-`Retry-After`, and twenty consecutive failures stop the pass rather than
-grinding on.
+than one overlapping the request's own duration. A 429, 502, 503 or 504 is treated as the service
+being unavailable rather than as a missing track: Harmon waits (honouring
+`Retry-After`, otherwise backing off to a minute), retries once, and then
+stops the pass. Nothing is lost — whatever was found is already staged, and
+running it again resumes where it stopped. Twenty unrelated failures in a row
+also stop the pass.
 Matching is on artist, title, album and duration, so a radio edit does not
 inherit the album version's timings.
 

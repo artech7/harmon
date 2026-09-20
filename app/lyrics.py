@@ -32,6 +32,14 @@ _last = 0.0
 # request's own duration.
 MIN_INTERVAL = 0.30
 
+# Consecutive times the service itself has refused, which is different from a
+# track simply not being in their database.
+_service_failures = 0
+
+
+class ServiceUnavailable(RuntimeError):
+    """LRCLIB is refusing, not answering "no". Wait rather than push on."""
+
 SYNCED, UNSYNCED, NONE = "synced", "unsynced", "none"
 
 
@@ -146,15 +154,29 @@ def _get(params: dict) -> dict | None:
             # interval from this one finishing — not from it starting.
             _last = time.time()
 
+    global _service_failures
+
     if r.status_code == 404:
+        _service_failures = 0          # they answered; this track just is not there
         return None
-    if r.status_code == 429:
-        # Back off properly rather than hammering through a refusal.
-        retry = float(r.headers.get("Retry-After") or 5)
-        db.log(f"LRCLIB asked us to slow down; pausing {retry:.0f}s", "warn")
-        time.sleep(min(retry, 60))
-        raise RuntimeError("rate limited by LRCLIB")
+
+    # 429 is "slow down", 503 is "not right now", 502/504 are a bad day at
+    # their proxy. None of them are about this track, and all of them get
+    # worse if you keep knocking.
+    if r.status_code in (429, 502, 503, 504):
+        _service_failures += 1
+        header = r.headers.get("Retry-After")
+        pause = float(header) if header and header.isdigit() else min(
+            2 ** min(_service_failures, 6), 60)
+        if _service_failures <= 2:
+            db.log(f"LRCLIB answered {r.status_code}; waiting {pause:.0f}s "
+                   f"before trying again", "warn")
+        time.sleep(min(pause, 60))
+        raise ServiceUnavailable(
+            f"LRCLIB is unavailable ({r.status_code}); waited {pause:.0f}s")
+
     r.raise_for_status()
+    _service_failures = 0
     return r.json()
 
 
@@ -210,7 +232,8 @@ def stage(track_ids: list[int] | None = None, limit: int = 0, progress=None) -> 
                "ORDER BY album_artist, album, disc_no, track_no")
         rows = db.query(sql + (" LIMIT ?" if limit else ""), (limit,) if limit else ())
 
-    result = {"checked": 0, "synced": 0, "plain": 0, "missing": 0, "failed": 0}
+    result = {"checked": 0, "synced": 0, "plain": 0, "missing": 0, "failed": 0,
+              "unavailable": False}
     total = max(len(rows), 1)
 
     for i, row in enumerate(rows):
@@ -218,14 +241,27 @@ def stage(track_ids: list[int] | None = None, limit: int = 0, progress=None) -> 
         result["checked"] += 1
         try:
             found = lookup(track)
+        except ServiceUnavailable:
+            # The service is down, not this track. One retry after the pause
+            # _get already took; if it still refuses, stop the whole pass
+            # rather than working through 21,000 tracks getting nowhere.
+            try:
+                found = lookup(track)
+            except Exception:
+                result["unavailable"] = True
+                db.log(
+                    f"Stopping after {result['checked']} tracks: LRCLIB is not "
+                    f"responding. Nothing is lost — the tracks already found are "
+                    f"waiting in Review, and running this again picks up where it "
+                    f"left off.", "warn")
+                break
         except Exception as exc:
             result["failed"] += 1
-            # One noisy line per run, not one per track.
             if result["failed"] <= 3:
                 db.log(f"LRCLIB lookup failed: {str(exc)[:140]}", "warn")
             elif result["failed"] == 20:
-                db.log("LRCLIB has failed 20 times; stopping this pass. "
-                       "Try again later.", "warn")
+                db.log("LRCLIB has failed 20 times in a row; stopping this pass.",
+                       "warn")
                 break
             found = None
 
