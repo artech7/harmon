@@ -299,6 +299,10 @@ check("your mapping places it", gb.canonicalize("sea shanty"), "Folk")
 gb.add_custom("Polka")
 check("your own genre is recognised", gb.canonicalize("polka"), "Polka")
 check("your genres join the vocabulary", "Polka" in gb.vocabulary(), True)
+_v = gb.vocabulary()
+check("the vocabulary is alphabetical", _v, sorted(_v, key=str.lower))
+check("your own genres sort in with the rest, not after them",
+      _v.index("Polka") < _v.index("Pop") and _v.index("Polka") > _v.index("Metal"), True)
 
 # A stray tag can only be judged by seeing who carries it.
 db.execute("UPDATE tracks SET genre='Sea Shanty' WHERE id IN "

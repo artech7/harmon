@@ -851,6 +851,10 @@ async function viewMetadata() {
     });
   }
 
+  /* Alphabetical by default, because that is how you find a genre. Count
+     order stays available, because that is how you find the long tail. */
+  let genreSort = 'name';
+
   const genreBook = el('div', {});
   async function paintGenres() {
     genreBook.innerHTML = '';
@@ -943,8 +947,21 @@ async function viewMetadata() {
       el('details', { style: 'margin-top:14px' },
         el('summary', { class: 'rmeta', style: 'cursor:pointer' },
           `Every value currently in your library (${num(d.items.length)})`),
+        el('div', { class: 'bar', style: 'margin:12px 0 4px' },
+          el('div', { class: 'segs' },
+            el('button', {
+              class: 'sm' + (genreSort === 'name' ? ' on' : ''),
+              onclick: () => { genreSort = 'name'; paintGenres(); },
+            }, 'A\u2013Z'),
+            el('button', {
+              class: 'sm' + (genreSort === 'tracks' ? ' on' : ''),
+              onclick: () => { genreSort = 'tracks'; paintGenres(); },
+            }, 'Most tracks'))),
         el('div', { class: 'rows', style: 'margin-top:8px' },
-          d.items.map((it) => {
+          [...d.items].sort((x, y) => genreSort === 'tracks'
+            ? y.tracks - x.tracks
+            : x.value.localeCompare(y.value, undefined, { sensitivity: 'base' })
+          ).map((it) => {
             const inside = el('div', { class: 'gbody', style: 'display:none' });
             let loaded = false;
             const reveal = async () => {

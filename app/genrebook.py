@@ -100,9 +100,15 @@ def save_rules(rules: dict) -> dict:
 
 
 def vocabulary() -> list[str]:
-    """Everything a genre is allowed to be: built-ins plus your own."""
+    """Everything a genre is allowed to be: built-ins plus your own.
+
+    CANON is written in family order because that is how it reads as source.
+    Anywhere it is presented as a list to pick from, alphabetical is the only
+    order that lets you find something in sixty-odd entries.
+    """
     rules = _rules()
-    return CANON + [g for g in rules.get("custom", []) if g not in CANON]
+    combined = CANON + [g for g in rules.get("custom", []) if g not in CANON]
+    return sorted(combined, key=lambda g: g.lower())
 
 
 def canonicalize(tag: str) -> str | None:
@@ -196,7 +202,7 @@ def distribution() -> dict:
         "SELECT genre, COUNT(*) AS tracks, COUNT(DISTINCT COALESCE(album_artist, artist)) "
         "  AS artists "
         "FROM tracks WHERE missing=0 AND genre IS NOT NULL AND genre <> '' "
-        "GROUP BY genre ORDER BY tracks DESC"
+        "GROUP BY genre ORDER BY genre COLLATE NOCASE"
     )
 
     items, unmapped = [], []
@@ -222,7 +228,7 @@ def distribution() -> dict:
         "unmapped": unmapped,
         "after": sorted(
             ({"genre": g, "tracks": n} for g, n in landing.items()),
-            key=lambda e: -e["tracks"],
+            key=lambda e: e["genre"].lower(),
         ),
         "vocabulary": vocabulary(),
     }
