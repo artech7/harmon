@@ -25,7 +25,10 @@ SLASH = re.compile(r"\s*[/;|]\s*")
 # off unless asked for, and is staged at low confidence when it is on.
 COMMA = re.compile(r"\s*,\s+")
 
-UNDERSCORE = re.compile(r"_+")
+# Only underscores acting as separators — between two word characters. A
+# leading or trailing one is usually deliberate styling (_moshang), so it
+# survives.
+UNDERSCORE = re.compile(r"(?<=\w)_+(?=\w)")
 SPACES = re.compile(r"\s{2,}")
 TRAILING = re.compile(r"[\s,;/|&-]+$")
 
@@ -42,10 +45,10 @@ def tidy(name: str | None) -> str:
     if not name:
         return ""
     text = str(name)
-    # Underscores only mean "this came from a filename" when the name has no
-    # real spaces. "Panic!_At_The_Disco" yes; "Godspeed You! Black_Emperor" no.
-    if "_" in text and " " not in text:
-        text = UNDERSCORE.sub(" ", text)
+    # An underscore between two word characters is a space that a filesystem
+    # ate. It does not matter whether the rest of the name already has spaces:
+    # "Hollywood_Undead feat. Tech N9ne" is as wrong as "3_Doors_Down".
+    text = UNDERSCORE.sub(" ", text)
     text = SPACES.sub(" ", text).strip()
     text = TRAILING.sub("", text)
     return text

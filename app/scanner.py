@@ -28,6 +28,14 @@ _VERSION_WORDS = (
 _VERSION_PAREN = re.compile(rf"[\(\[][^)\]]*\b(?:{_VERSION_WORDS})\b[^)\]]*[\)\]]", re.I)
 _SUFFIX = re.compile(rf"\s*[-–]\s*(?:{_VERSION_WORDS})\b.*$", re.I)
 _NOISE = re.compile(r"[^\w\s]", re.UNICODE)
+# An underscore counts as a word character, so _NOISE leaves it alone. For
+# comparison purposes a filesystem-eaten space should read as a space, or
+# "Low_Tide" and "Low Tide" never look like the same song.
+# In a comparison key an underscore is always a separator, never part of a
+# word. It has to go first: "(2011_Remaster)" hides from the remaster pattern
+# because _ is a word character and kills the \b boundary, and
+# "Idol_(feat._X)" leaves a stray _ behind once the bracket is stripped.
+_UNDERSCORE = re.compile(r"_+")
 _SPACES = re.compile(r"\s+")
 _COPY = re.compile(r"(\s+\(\d+\)|\s+-?\s*copy|\s+duplicate)\s*$", re.I)
 
@@ -47,7 +55,7 @@ def title_qualifier(text: str | None) -> str:
     if not text:
         return ""
     parts = []
-    for match in _QUALIFIER.finditer(str(text)):
+    for match in _QUALIFIER.finditer(_UNDERSCORE.sub(" ", str(text))):
         piece = match.group(1) or match.group(2) or ""
         piece = re.sub(r"^\s*(feat|ft|featuring|with)\.?\s*", "", piece, flags=re.I)
         piece = _NOISE.sub(" ", unicodedata.normalize("NFKD", piece).lower())
@@ -62,6 +70,7 @@ def normalize(text: str | None) -> str:
     if not text:
         return ""
     s = unicodedata.normalize("NFKD", str(text)).lower()
+    s = _UNDERSCORE.sub(" ", s)
     s = _PAREN.sub(" ", s)
     s = _VERSION_PAREN.sub(" ", s)
     s = _BRACKET.sub(" ", s)

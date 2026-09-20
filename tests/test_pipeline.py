@@ -83,6 +83,7 @@ config.save({"target": {"codec": "opus", "bitrate": 128}})
 check("changing the target re-queues everything", transcode.stage_conversions(), 3)
 
 from app import albums, browse, enrich, hygiene, providers
+from app.scanner import normalize
 
 # --- codec-only mode ------------------------------------------------------
 config.save({"target": {"codec": "aac", "bitrate": 256, "bitrate_mode": "codec_only"}})
@@ -417,6 +418,17 @@ check("acoustid stays quiet without a key",
 
 
 check("underscore names are unpacked", hygiene.tidy("3_Doors_Down"), "3 Doors Down")
+check("underscores go even when the name has spaces",
+      hygiene.tidy("Hollywood_Undead feat. Tech N9ne"), "Hollywood Undead feat. Tech N9ne")
+check("a trailing underscore name is tidied", hygiene.tidy("Antti Martikainen_Epic"),
+      "Antti Martikainen Epic")
+check("a leading underscore is left as styling", hygiene.tidy("_moshang"), "_moshang")
+check("an underscored title matches its spaced form",
+      normalize("Low_Tide"), normalize("Low Tide"))
+check("an underscored remaster tag is still stripped",
+      normalize("Low_Tide_(2011_Remaster)"), normalize("Low Tide"))
+check("an underscored feat. still yields the guest",
+      title_qualifier("Idol_(feat._Tech_N9ne)"), title_qualifier("Idol (feat. Tech N9ne)"))
 check("AC/DC survives slash splitting", hygiene.split_credit("AC/DC"), ["AC/DC"])
 check("Earth, Wind & Fire stays one band",
       len(hygiene.split_credit("Earth, Wind & Fire")), 1)

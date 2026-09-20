@@ -165,6 +165,13 @@ Metadata for Jellyfin, Plex and Navidrome follows one convention: `artist`
 holds the full credit, `album_artist` holds the primary artist alone. Harmon's
 Metadata screen proposes exactly that, plus mechanical name cleanup.
 
+Underscores between two word characters are treated as spaces a filesystem
+ate, whether or not the rest of the name already has spaces — so both
+`3_Doors_Down` and `Hollywood_Undead feat. Tech N9ne` are fixed. A leading or
+trailing underscore survives, since that is usually deliberate styling. The
+same applies when comparing titles for duplicates, so `Low_Tide` and
+`Low Tide` are recognised as the same song.
+
 It never changes casing — no algorithm gets `AC/DC` or `will.i.am` right, so
 casing is left to MusicBrainz. Slash splitting is guarded so `AC/DC` survives,
 and comma splitting is off by default because `Earth, Wind & Fire` is one band.
