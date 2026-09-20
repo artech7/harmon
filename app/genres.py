@@ -164,6 +164,11 @@ def resolve(track: dict, results: list[dict]) -> tuple[str | None, float]:
     Cached per artist, so every track by a band gets the same answer and the
     lookup happens once rather than once per file.
     """
+    from . import genrebook
+    pinned = genrebook.pinned_genre(track.get("artist") or track.get("album_artist") or "")
+    if pinned:
+        return pinned, 0.99          # you decided this; nothing outvotes it
+
     key = artist_key(track)
     if key:
         hit = cached_for_artist(key)

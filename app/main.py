@@ -283,6 +283,28 @@ def genres_tracks(value: str, limit: int = 60):
     return genrebook.tracks_for(value, limit)
 
 
+@api.get("/api/genres/artists-elsewhere")
+def genres_artists_elsewhere(value: str, target: str | None = None):
+    return genrebook.artists_elsewhere(value, target)
+
+
+@api.post("/api/genres/assign-artist")
+def genres_assign_artist(payload: dict = Body(...)):
+    artist = (payload.get("artist") or "").strip()
+    genre = (payload.get("genre") or "").strip()
+    if not artist:
+        raise HTTPException(400, "An artist is required")
+    try:
+        return genrebook.assign_artist(artist, genre, bool(payload.get("pin", True)))
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+
+
+@api.delete("/api/genres/pin/{artist}")
+def genres_unpin(artist: str):
+    return genrebook.unpin_artist(artist)
+
+
 @api.post("/api/genres/custom")
 def genres_add_custom(payload: dict = Body(...)):
     name = (payload.get("name") or "").strip()

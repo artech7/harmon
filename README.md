@@ -120,6 +120,14 @@ listed separately, never guessed at: send it to a genre you already have, or
 keep it as a genre of its own. Your genres and mappings take priority over the
 built-in ones.
 
+When you map a stray genre, Harmon checks whether the artists in it also have
+tracks filed under other genres — one act is usually scattered across several
+strays, so fixing one leaves the rest behind. It offers to move each artist's
+whole catalogue to the genre you just chose, **one artist at a time**: a stray
+genre can hold acts that belong nowhere near each other, and a blanket
+approval would be wrong for at least one of them. Moving an artist also pins
+them, so a later lookup will not quietly change it back.
+
 **Tidy up what you have** reads the genres already on your files and stages the
 differences in Review. After that, everything Harmon proposes passes through
 the same list, so it stays tidy.

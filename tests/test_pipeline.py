@@ -309,6 +309,44 @@ check("and its tracks", len(_d["tracks"]) >= 1, True)
 check("each track carries an id to jump from",
       all("id" in t for t in _d["tracks"]), True)
 check("the total is reported", _d["total"], 2)
+
+# --- consolidating an artist scattered across genres ----------------------
+db.execute("DELETE FROM changes")
+_n = 9000
+for _artist, _genre, _count in [("Two Steps From Hell", "Epic Music", 2),
+                                ("Tool", "Epic Music", 2),
+                                ("Two Steps From Hell", "Trailer Music", 5),
+                                ("Two Steps From Hell", "Cinematic", 3),
+                                ("Tool", "Progressive Metal", 6),
+                                ("Solo Act", "Epic Music", 2)]:
+    for _ in range(_count):
+        _n += 1
+        db.execute("INSERT INTO tracks(path,title,artist,album_artist,album,genre,missing) "
+                   "VALUES(?,?,?,?,'Alb',?,0)",
+                   (f"/scatter/{_n}.mp3", f"S{_n}", _artist, _artist, _genre))
+
+_e = gb.artists_elsewhere("Epic Music", "Soundtrack")
+_names = [a["artist"] for a in _e["artists"]]
+check("artists with tracks elsewhere are listed",
+      set(_names), {"Two Steps From Hell", "Tool"})
+check("an artist with no scattering is left out", "Solo Act" in _names, False)
+check("their other genres are itemised",
+      {o["genre"] for a in _e["artists"] if a["artist"] == "Two Steps From Hell"
+       for o in a["elsewhere"]}, {"Trailer Music", "Cinematic"})
+
+_r = gb.assign_artist("Two Steps From Hell", "Soundtrack")
+check("assigning covers the whole catalogue", _r["staged"], 10)
+check("the other artist is untouched",
+      db.one("SELECT COUNT(*) AS n FROM changes c JOIN tracks t ON t.id=c.track_id "
+             "WHERE t.artist='Tool' AND c.field='genre'")["n"], 0)
+check("the artist is pinned", gb.pinned_genre("two steps from hell"), "Soundtrack")
+check("a pin beats a lookup",
+      genres.resolve({"artist": "Two Steps From Hell"},
+                     [{"source": "lastfm", "genre": "Jazz"}])[0], "Soundtrack")
+gb.unpin_artist("Two Steps From Hell")
+check("unpinning releases it", gb.pinned_genre("Two Steps From Hell"), None)
+db.execute("DELETE FROM changes")
+db.execute("DELETE FROM tracks WHERE path LIKE '/scatter/%'")
 gb.remove_custom("Polka")
 check("removing it takes it back out", gb.canonicalize("polka"), None)
 

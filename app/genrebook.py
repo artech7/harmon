@@ -295,3 +295,110 @@ def tracks_for(value: str, limit: int = 60) -> dict:
         "artists": db.rows_to_dicts(artists),
         "tracks": db.rows_to_dicts(tracks),
     }
+
+
+def _artist_norm(name: str) -> str:
+    from .scanner import normalize
+    return normalize(name or "")
+
+
+def artist_pins() -> dict:
+    return _rules().get("artists", {})
+
+
+def pin_artist(artist: str, genre: str) -> dict:
+    """Fix an artist to a genre for good, so lookups stop second-guessing it."""
+    rules = _rules()
+    rules.setdefault("artists", {})[_artist_norm(artist)] = genre
+    return save_rules(rules)
+
+
+def unpin_artist(artist: str) -> dict:
+    rules = _rules()
+    rules.get("artists", {}).pop(_artist_norm(artist), None)
+    return save_rules(rules)
+
+
+def pinned_genre(artist: str) -> str | None:
+    return artist_pins().get(_artist_norm(artist))
+
+
+def artists_elsewhere(value: str, target: str | None = None) -> dict:
+    """The artists in one genre value, and where else in the library they sit.
+
+    Mapping a stray genre fixes the tracks carrying it and leaves the same
+    artist scattered under everything else they were tagged with. This finds
+    that scattering so it can be dealt with in one decision per artist —
+    per artist, because "Epic Music" might be Two Steps From Hell and Tool,
+    and those two do not belong in the same place.
+    """
+    here = db.query(
+        "SELECT COALESCE(album_artist, artist) AS artist, COUNT(*) AS tracks "
+        "FROM tracks WHERE missing=0 AND genre=? AND COALESCE(album_artist, artist) <> '' "
+        "GROUP BY artist ORDER BY tracks DESC",
+        (value,),
+    )
+
+    out = []
+    for row in here:
+        artist = row["artist"]
+        others = db.query(
+            "SELECT genre, COUNT(*) AS tracks FROM tracks "
+            "WHERE missing=0 AND COALESCE(album_artist, artist) = ? "
+            "  AND genre IS NOT NULL AND genre <> '' AND genre <> ? "
+            "GROUP BY genre ORDER BY tracks DESC",
+            (artist, value),
+        )
+        others = db.rows_to_dicts(others)
+        if not others:
+            continue
+        out.append({
+            "artist": artist,
+            "tracks_here": row["tracks"],
+            "elsewhere": others,
+            "tracks_elsewhere": sum(o["tracks"] for o in others),
+            "pinned": pinned_genre(artist),
+        })
+
+    return {"value": value, "target": target, "artists": out}
+
+
+def assign_artist(artist: str, genre: str, pin: bool = True) -> dict:
+    """Stage every track by an artist onto one genre.
+
+    Staged, not written — it goes through Review like everything else. The pin
+    is what stops a later lookup quietly undoing the decision.
+    """
+    if genre not in vocabulary():
+        raise ValueError(f"{genre!r} is not one of your genres")
+
+    rows = db.query(
+        "SELECT id, genre FROM tracks WHERE missing=0 "
+        "AND COALESCE(album_artist, artist) = ?", (artist,),
+    )
+    staged = 0
+    for row in rows:
+        if (row["genre"] or "") == genre:
+            continue
+        exists = db.one(
+            "SELECT id FROM changes WHERE track_id=? AND field='genre' "
+            "AND status IN ('pending','approved')", (row["id"],),
+        )
+        if exists:
+            db.execute(
+                "UPDATE changes SET new_value=?, source='artist-genre', confidence=0.95 "
+                "WHERE track_id=? AND field='genre' AND status='pending'",
+                (genre, row["id"]),
+            )
+            continue
+        db.execute(
+            "INSERT INTO changes(kind, track_id, field, old_value, new_value, source, "
+            "confidence) VALUES('tag',?,'genre',?,?,'artist-genre',0.95)",
+            (row["id"], row["genre"], genre),
+        )
+        staged += 1
+
+    if pin:
+        pin_artist(artist, genre)
+    db.log(f"{artist}: {staged} tracks staged as {genre}")
+    return {"artist": artist, "genre": genre, "staged": staged, "tracks": len(rows)}

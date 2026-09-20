@@ -61,6 +61,30 @@ async function api(path, options = {}) {
 
 const _recentToasts = new Map();
 
+/* A modal, for the one case that genuinely interrupts. Returns a close
+   function so the caller decides when it goes. */
+function modal(title, lede, body, footer) {
+  const box = el('div', { class: 'modal' },
+    el('h3', {}, title),
+    lede && el('p', { class: 'lede' }, lede),
+    body,
+    footer && el('div', { class: 'modal-foot' }, footer));
+
+  const back = el('div', {
+    class: 'backdrop',
+    onclick: (e) => { if (e.target === back) close(); },
+  }, box);
+
+  const onKey = (e) => { if (e.key === 'Escape') close(); };
+  function close() {
+    back.remove();
+    document.removeEventListener('keydown', onKey);
+  }
+  document.addEventListener('keydown', onKey);
+  document.body.append(back);
+  return close;
+}
+
 function toast(message, bad = false) {
   const host = $('#toasts');
   if (!host) return;
@@ -768,6 +792,65 @@ async function viewMetadata() {
         el('b', {}, 'Every track has what it needs'),
         'Artist, album, genre and artwork are all filled in.');
 
+  /* The same artist is usually scattered across several stray genres, so
+     fixing one leaves the rest behind. Offer the rest — but per artist,
+     since one stray genre can hold acts that belong nowhere near each other. */
+  async function offerConsolidation(value, target) {
+    const d = await api(`/genres/artists-elsewhere?value=${encodeURIComponent(value)}` +
+                        `&target=${encodeURIComponent(target)}`);
+    if (!d.artists.length) return;
+
+    const rows = el('div', { class: 'rows' });
+    const done = new Set();
+
+    d.artists.forEach((a) => {
+      const status = el('span', { class: 'rmeta' },
+        a.pinned ? `already set to ${a.pinned}` : '');
+      const apply = el('button', {
+        class: 'go sm', onclick: async () => {
+          apply.disabled = true;
+          const r = await api('/genres/assign-artist', {
+            method: 'POST', body: { artist: a.artist, genre: target },
+          });
+          done.add(a.artist);
+          status.textContent = `${num(r.staged)} tracks staged as ${target}`;
+          status.className = 'rmeta';
+          skip.disabled = true;
+          poll();
+        },
+      }, 'Move them');
+      const skip = el('button', {
+        class: 'sm', onclick: () => {
+          apply.disabled = true; skip.disabled = true;
+          status.textContent = 'left where they are';
+        },
+      }, 'Leave');
+
+      rows.append(el('div', { class: 'row', style: 'grid-template-columns:1fr auto auto' },
+        el('div', {},
+          el('div', { class: 'rname' }, a.artist),
+          el('div', { class: 'rmeta', style: 'white-space:normal' },
+            a.elsewhere.map((o) => `${o.genre} (${num(o.tracks)})`).join('  ·  ')),
+          el('div', { class: 'rmeta' },
+            `${num(a.tracks_elsewhere)} tracks under other genres`),
+          status),
+        apply, skip));
+    });
+
+    await new Promise((resolve) => {
+      const close = modal(
+        `These artists are scattered across other genres`,
+        `You just sent ${value} to ${target}. The artists that were in it also have ` +
+        `tracks filed under other genres. Move each one's whole catalogue to ${target}, ` +
+        `or leave it — they may not all belong in the same place. Nothing is written ` +
+        `until you approve it in Review.`,
+        rows,
+        [el('button', { class: 'go', onclick: () => { close(); resolve(); } }, 'Done'),
+         el('span', { class: 'rmeta' },
+           'Moving an artist also pins them, so later lookups will not change it back.')]);
+    });
+  }
+
   const genreBook = el('div', {});
   async function paintGenres() {
     genreBook.innerHTML = '';
@@ -831,8 +914,10 @@ async function viewMetadata() {
           el('button', {
             class: 'sm', onclick: async () => {
               if (!pick.value) { toast('Pick a genre to send it to first.'); return; }
-              await api('/genres/map', { method: 'POST', body: { from: u.value, to: pick.value } });
-              toast(`${u.value} now becomes ${pick.value}.`);
+              const target = pick.value;
+              await api('/genres/map', { method: 'POST', body: { from: u.value, to: target } });
+              toast(`${u.value} now becomes ${target}.`);
+              await offerConsolidation(u.value, target);
               paintGenres();
             },
           }, 'Map it'),
