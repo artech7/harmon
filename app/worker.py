@@ -77,14 +77,19 @@ def _start_job(kind: str, track_id: int | None = None, stage: str | None = None)
     return job_id
 
 
-def _update(job_id: int, progress: float, message: str, stage: str | None = None) -> None:
+def _update(job_id: int, progress: float | None, message: str,
+            stage: str | None = None) -> None:
+    """A None progress means "same as before" — used while waiting out an
+    outage, where the message changes but no work has happened."""
     checkpoint()
-    _current.update({"progress": round(progress, 3), "message": message})
+    _current["message"] = message
+    if progress is not None:
+        _current["progress"] = round(progress, 3)
     if stage:
         _current["stage"] = stage
     db.execute(
         "UPDATE jobs SET progress=?, message=?, updated_at=datetime('now') WHERE id=?",
-        (round(progress, 3), message, job_id),
+        (_current["progress"], message, job_id),
     )
 
 
@@ -332,6 +337,16 @@ def _watch_loop() -> None:
             interval = max(int(cfg["scan_interval_min"]), 1) * 60
             if cfg["auto_scan"] and not busy():
                 run_pipeline()
+
+            # A lyrics run that gave up should not need you to notice. If any
+            # tracks still lack synced lyrics, start again — it resumes where
+            # it stopped, so this costs nothing when there is nothing to do.
+            if cfg.get("auto_lyrics") and not busy():
+                outstanding = db.one(
+                    "SELECT COUNT(*) AS n FROM tracks WHERE missing=0 "
+                    "AND COALESCE(lyrics,'none') <> 'synced'")["n"]
+                if outstanding:
+                    run_lyrics(limit=int(cfg.get("lyrics_batch") or 0))
         except Exception as exc:
             db.log(f"Automatic pass failed: {exc}", "error")
             interval = 300

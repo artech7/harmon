@@ -18,6 +18,18 @@ WEB_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     db.init()
+    # A job only lives as long as the process. If the container restarted
+    # mid-run the row still says "running", which is worse than saying
+    # nothing — it implies work is happening that is not.
+    orphaned = db.one("SELECT COUNT(*) AS n FROM jobs WHERE state='running'")["n"]
+    if orphaned:
+        db.execute(
+            "UPDATE jobs SET state='interrupted', "
+            "message='Harmon restarted while this was running', "
+            "updated_at=datetime('now') WHERE state='running'"
+        )
+        db.log(f"{orphaned} job(s) were interrupted by a restart. "
+               f"Nothing staged is lost; running them again resumes.", "warn")
     db.log("Harmon started")
     worker.start()
     yield

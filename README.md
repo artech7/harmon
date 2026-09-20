@@ -195,9 +195,11 @@ Fetching uses [LRCLIB](https://lrclib.net), which is free and needs no key.
 They ask for sequential requests with a 200–500ms gap, so Harmon sends one at
 a time and waits 300ms after each response before the next — a real gap rather
 than one overlapping the request's own duration. A 429, 502, 503 or 504 is treated as the service
-being unavailable rather than as a missing track: Harmon waits (honouring
-`Retry-After`, otherwise backing off to a minute), retries once, and then
-stops the pass. Nothing is lost — whatever was found is already staged, and
+being unavailable rather than as a missing track. Harmon then waits it out —
+one minute, three, ten, thirty, sixty — and carries on when they come back. A
+run started at bedtime survives their bad half-hour instead of giving up on
+it. Only after an hour of continuous refusal does the run stop, and
+**Keep looking for lyrics** in Settings restarts it on the timer. Nothing is lost — whatever was found is already staged, and
 running it again resumes where it stopped. Twenty unrelated failures in a row
 also stop the pass.
 Matching is on artist, title, album and duration, so a radio edit does not

@@ -40,6 +40,27 @@ _service_failures = 0
 class ServiceUnavailable(RuntimeError):
     """LRCLIB is refusing, not answering "no". Wait rather than push on."""
 
+
+# How long to wait after each consecutive outage before trying again. A run
+# started at bedtime should survive their bad half-hour, not give up on it.
+OUTAGE_WAITS = [60, 180, 600, 1800, 3600]
+
+
+def _wait(seconds: float, progress=None, note: str = "") -> None:
+    """Sleep in slices so the progress callback still runs.
+
+    The callback is what raises when you press Stop, so sleeping through it in
+    one go would make a waiting job unstoppable for an hour.
+    """
+    end = time.time() + seconds
+    while True:
+        left = end - time.time()
+        if left <= 0:
+            return
+        time.sleep(min(2.0, left))
+        if progress:
+            progress(None, f"{note} — trying again in {int(left)}s")
+
 SYNCED, UNSYNCED, NONE = "synced", "unsynced", "none"
 
 
@@ -233,37 +254,47 @@ def stage(track_ids: list[int] | None = None, limit: int = 0, progress=None) -> 
         rows = db.query(sql + (" LIMIT ?" if limit else ""), (limit,) if limit else ())
 
     result = {"checked": 0, "synced": 0, "plain": 0, "missing": 0, "failed": 0,
-              "unavailable": False}
+              "unavailable": False, "outages": 0}
     total = max(len(rows), 1)
 
     for i, row in enumerate(rows):
         track = dict(row)
         result["checked"] += 1
-        try:
-            found = lookup(track)
-        except ServiceUnavailable:
-            # The service is down, not this track. One retry after the pause
-            # _get already took; if it still refuses, stop the whole pass
-            # rather than working through 21,000 tracks getting nowhere.
+        # LRCLIB being down is not a reason to abandon the run. Wait it out,
+        # with the waits getting longer, and only give up after an hour of
+        # them refusing.
+        found = None
+        for attempt in range(len(OUTAGE_WAITS) + 1):
             try:
                 found = lookup(track)
-            except Exception:
-                result["unavailable"] = True
-                db.log(
-                    f"Stopping after {result['checked']} tracks: LRCLIB is not "
-                    f"responding. Nothing is lost — the tracks already found are "
-                    f"waiting in Review, and running this again picks up where it "
-                    f"left off.", "warn")
+                result["outages"] = 0
                 break
-        except Exception as exc:
-            result["failed"] += 1
-            if result["failed"] <= 3:
-                db.log(f"LRCLIB lookup failed: {str(exc)[:140]}", "warn")
-            elif result["failed"] == 20:
-                db.log("LRCLIB has failed 20 times in a row; stopping this pass.",
-                       "warn")
+            except ServiceUnavailable:
+                if attempt >= len(OUTAGE_WAITS):
+                    result["unavailable"] = True
+                    break
+                pause = OUTAGE_WAITS[attempt]
+                result["outages"] += 1
+                if attempt == 0:
+                    db.log(f"LRCLIB is not responding. Waiting and retrying — "
+                           f"this run keeps going on its own.", "warn")
+                _wait(pause, progress, f"LRCLIB unavailable ({result['checked']} done)")
+            except Exception as exc:
+                result["failed"] += 1
+                if result["failed"] <= 3:
+                    db.log(f"LRCLIB lookup failed: {str(exc)[:140]}", "warn")
+                elif result["failed"] == 20:
+                    db.log("LRCLIB has failed 20 times in a row; stopping this pass.",
+                           "warn")
+                    result["unavailable"] = True
                 break
-            found = None
+
+        if result["unavailable"]:
+            db.log(
+                f"Gave up after {result['checked']} tracks: LRCLIB stayed down for "
+                f"over an hour. Nothing is lost — what was found is in Review, and "
+                f"this picks up where it left off.", "warn")
+            break
 
         if not found:
             result["missing"] += 1

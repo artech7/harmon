@@ -275,6 +275,13 @@ open(f"{_lf}/a.lrc", "w").write("[00:01.00] placeholder\n")
 open(f"{_lf}/b.txt", "w").write("placeholder\n")
 scanner.scan()
 
+check("an outage schedule exists and escalates",
+      _lyr.OUTAGE_WAITS == sorted(_lyr.OUTAGE_WAITS) and len(_lyr.OUTAGE_WAITS) >= 3, True)
+check("it waits over an hour before giving up",
+      sum(_lyr.OUTAGE_WAITS) >= 3600, True)
+check("waiting is interruptible in slices", "min(2.0, left)" in
+      open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                        "app", "lyrics.py")).read(), True)
 check("a service outage is its own kind of failure",
       issubclass(_lyr.ServiceUnavailable, RuntimeError), True)
 check("LRCLIB pacing sits inside their 200-500ms guidance",

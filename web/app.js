@@ -583,6 +583,27 @@ async function viewLyrics() {
       cov.none ? 'hot' : 'good'),
     cov.unknown ? stat('Not checked', num(cov.unknown), 'run the scan again') : null));
 
+  // "Did it stop, and why" has to be answerable. The job is a background
+  // thread on the server and does not care about your browser, so when it
+  // ends early the reason is recorded — it just was not shown anywhere.
+  const jobs = await api('/jobs?limit=8');
+  const lyricJobs = jobs.filter((j) => j.kind && j.kind.startsWith('lyrics'));
+  if (lyricJobs.length) {
+    frag.append(card('Recent lyrics runs',
+      'These run on the server, not in your browser. Closing the tab does not stop one — if a run ended early, the reason is here.',
+      el('div', { class: 'rows' }, lyricJobs.map((j) => {
+        const tone = { done: 'good', failed: 'hot', cancelled: 'wait',
+                       interrupted: 'hot', running: 'wait' }[j.state] || null;
+        return el('div', { class: 'row', style: 'grid-template-columns:1fr auto auto' },
+          el('div', {},
+            el('div', { class: 'rname' },
+              j.kind === 'lyrics_scan' ? 'Checked what has lyrics' : 'Looked up lyrics'),
+            el('div', { class: 'rmeta', style: 'white-space:normal' }, j.message || '')),
+          el('span', { class: 'rmeta' }, (j.updated_at || '').slice(5, 16)),
+          chip(j.state, tone));
+      }))));
+  }
+
   frag.append(card('Fetch from LRCLIB',
     'LRCLIB is a free, open lyrics database — no key, no account. Harmon matches on artist, title, album and length, so a radio edit does not get the album version\'s timings. Files are written next to each track and nothing touches the audio itself. Anything found is staged in Review first.',
     el('div', { class: 'bar' },
@@ -1885,6 +1906,9 @@ async function viewSettings() {
       a.auto_enrich, (v) => save({ automation: { auto_enrich: v } })),
     swRow('Check new tracks against your target format', 'Stages conversions for anything that does not match.',
       a.auto_standardize, (v) => save({ automation: { auto_standardize: v } })),
+    swRow('Keep looking for lyrics',
+      'Picks the lyrics run back up on the timer if it gave up. A run resumes where it stopped, so leaving this on costs nothing once the library is covered.',
+      a.auto_lyrics, (v) => save({ automation: { auto_lyrics: v } })),
     el('h2', {}, 'Approve without asking'),
     swRow('Tag and artwork changes', 'Only ones at or above your confidence setting.',
       a.auto_approve_tags, (v) => save({ automation: { auto_approve_tags: v } })),

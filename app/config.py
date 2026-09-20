@@ -120,6 +120,10 @@ DEFAULTS: dict[str, Any] = {
         "scan_interval_min": 30,
         "auto_enrich": True,
         "auto_standardize": True,
+        # Keep chipping away at lyrics on the timer. A run resumes where it
+        # stopped, so an outage overnight costs a delay, not the run.
+        "auto_lyrics": True,
+        "lyrics_batch": 0,          # 0 = as many as are left
         "auto_approve_tags": False,
         "auto_approve_converts": False,
         "auto_approve_deletes": False,
