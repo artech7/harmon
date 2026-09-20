@@ -255,6 +255,8 @@ open(f"{_lf}/a.lrc", "w").write("[00:01.00] placeholder\n")
 open(f"{_lf}/b.txt", "w").write("placeholder\n")
 scanner.scan()
 
+check("LRCLIB pacing sits inside their 200-500ms guidance",
+      0.2 <= _lyr.MIN_INTERVAL <= 0.5, True)
 check("a .lrc counts as synced", _lyr.state_for(f"{_lf}/a.mp3"), "synced")
 check("a .txt counts as plain text", _lyr.state_for(f"{_lf}/b.mp3"), "unsynced")
 check("neither counts as none", _lyr.state_for(f"{_lf}/c.mp3"), "none")

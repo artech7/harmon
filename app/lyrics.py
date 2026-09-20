@@ -24,7 +24,13 @@ from . import db
 LRCLIB = "https://lrclib.net/api/get"
 _lock = threading.Lock()
 _last = 0.0
-MIN_INTERVAL = 0.25          # polite pacing; LRCLIB publishes no hard limit
+
+# LRCLIB asks for sequential requests with a 200–500ms gap between them,
+# measured from when one finishes to when the next starts. 300ms sits in the
+# middle of that. The lock makes them sequential; the stamp below is taken
+# after the response so the gap is a real gap rather than overlapping the
+# request's own duration.
+MIN_INTERVAL = 0.30
 
 SYNCED, UNSYNCED, NONE = "synced", "unsynced", "none"
 
@@ -120,18 +126,34 @@ def coverage() -> dict:
 
 
 def _get(params: dict) -> dict | None:
+    """One request, sequential and paced, as LRCLIB asks.
+
+    They are a free service with no key and no hard limit published, which is
+    a request to behave rather than an invitation not to.
+    """
     global _last
     with _lock:
         wait = MIN_INTERVAL - (time.time() - _last)
         if wait > 0:
             time.sleep(wait)
-        _last = time.time()
-        with httpx.Client(timeout=20, follow_redirects=True) as client:
-            r = client.get(LRCLIB, params=params, headers={
-                "User-Agent": "Harmon/1.0 (https://github.com/artech7/harmon)",
-            })
+        try:
+            with httpx.Client(timeout=20, follow_redirects=True) as client:
+                r = client.get(LRCLIB, params=params, headers={
+                    "User-Agent": "Harmon/1.0 (https://github.com/artech7/harmon)",
+                })
+        finally:
+            # Stamped after the response, so the next request waits a full
+            # interval from this one finishing — not from it starting.
+            _last = time.time()
+
     if r.status_code == 404:
         return None
+    if r.status_code == 429:
+        # Back off properly rather than hammering through a refusal.
+        retry = float(r.headers.get("Retry-After") or 5)
+        db.log(f"LRCLIB asked us to slow down; pausing {retry:.0f}s", "warn")
+        time.sleep(min(retry, 60))
+        raise RuntimeError("rate limited by LRCLIB")
     r.raise_for_status()
     return r.json()
 
@@ -198,8 +220,13 @@ def stage(track_ids: list[int] | None = None, limit: int = 0, progress=None) -> 
             found = lookup(track)
         except Exception as exc:
             result["failed"] += 1
+            # One noisy line per run, not one per track.
             if result["failed"] <= 3:
                 db.log(f"LRCLIB lookup failed: {str(exc)[:140]}", "warn")
+            elif result["failed"] == 20:
+                db.log("LRCLIB has failed 20 times; stopping this pass. "
+                       "Try again later.", "warn")
+                break
             found = None
 
         if not found:
