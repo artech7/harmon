@@ -172,6 +172,29 @@ trailing underscore survives, since that is usually deliberate styling. The
 same applies when comparing titles for duplicates, so `Low_Tide` and
 `Low Tide` are recognised as the same song.
 
+### Collaborations
+
+A credit like `Dax/Elle King` stored as one string is one artist to every
+player that does not split on slashes — and a player that *does* split on
+slashes will break `AC/DC`. So Harmon writes collaborations as genuinely
+separate values instead, which needs no splitting anywhere:
+
+- MP3 as an ID3v2.4 frame holding several values (v2.3 cannot; it would join
+  them back with `/` on save)
+- FLAC and Ogg as repeated `ARTIST` fields
+- MP4 as a list in the artist atom
+
+`ARTISTS` is written alongside, the MusicBrainz Picard convention some servers
+read for linking. Album artist still holds the primary artist alone, so albums
+group where they should.
+
+The split keeps initialisms whole — `AC/DC`, `T/O` — by refusing to split when
+a side is two characters or fewer. Three is a real name: `Dax` splits.
+
+Once a track holds several values, metadata lookups will not overwrite its
+artist, since every source returns a single string and writing it would
+flatten the list back.
+
 It never changes casing — no algorithm gets `AC/DC` or `will.i.am` right, so
 casing is left to MusicBrainz. Slash splitting is guarded so `AC/DC` survives,
 and comma splitting is off by default because `Earth, Wind & Fire` is one band.
@@ -192,6 +215,23 @@ looks for a `.lrc` or `.txt` beside each track *and* for lyrics stored in the
 audio tags, so anything you already have is not fetched again.
 
 Fetching uses [LRCLIB](https://lrclib.net), which is free and needs no key.
+
+### Running your own LRCLIB
+
+LRCLIB is [open source](https://github.com/tranxuanthang/lrclib) — Rust and
+SQLite — and publishes its whole database at
+[lrclib.net/db-dumps](https://lrclib.net/db-dumps). Pointing Harmon at your own
+instance removes the pacing entirely, which on a 21,000-track library saves
+roughly an hour and three quarters of pure waiting.
+
+The cost is disk. The dump is over 40 GB compressed and considerably more
+unpacked, plus room to decompress. For a one-off pass over an existing library
+the public service is usually the better trade; for continuous use, or a very
+large library, your own instance wins.
+
+Steps are in the Lyrics screen under "How to run your own". Once the address is
+set, Harmon drops the delay between requests — your own hardware answering your
+own queries is owed no courtesy.
 They ask for sequential requests with a 200–500ms gap, so Harmon sends one at
 a time and waits 300ms after each response before the next — a real gap rather
 than one overlapping the request's own duration. A 429, 502, 503 or 504 is treated as the service

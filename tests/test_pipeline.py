@@ -275,6 +275,15 @@ open(f"{_lf}/a.lrc", "w").write("[00:01.00] placeholder\n")
 open(f"{_lf}/b.txt", "w").write("placeholder\n")
 scanner.scan()
 
+check("the public service is the default", _lyr.base_url(), _lyr.LRCLIB_PUBLIC)
+check("and is not treated as self-hosted", _lyr.is_self_hosted(), False)
+config.save({"providers": {"lrclib_url": "http://10.0.0.5:3300/"}})
+check("a configured instance is used", _lyr.base_url(), "http://10.0.0.5:3300")
+check("trailing slashes do not double up", _lyr.base_url().endswith("/"), False)
+check("your own instance is recognised", _lyr.is_self_hosted(), True)
+config.save({"providers": {"lrclib_url": ""}})
+check("clearing it goes back to the public service", _lyr.is_self_hosted(), False)
+
 check("an outage schedule exists and escalates",
       _lyr.OUTAGE_WAITS == sorted(_lyr.OUTAGE_WAITS) and len(_lyr.OUTAGE_WAITS) >= 3, True)
 check("it waits over an hour before giving up",
@@ -451,6 +460,40 @@ check("underscores go even when the name has spaces",
 check("a trailing underscore name is tidied", hygiene.tidy("Antti Martikainen_Epic"),
       "Antti Martikainen Epic")
 check("a leading underscore is left as styling", hygiene.tidy("_moshang"), "_moshang")
+check("a trailing underscore is left alone too", hygiene.tidy("moshang_"), "moshang_")
+# & and , are not word characters, so requiring them on both sides was wrong.
+check("underscores next to an ampersand go",
+      hygiene.tidy("Iron_&_Wine"), "Iron & Wine")
+check("and next to a comma",
+      hygiene.tidy("Earth,_Wind_&_Fire"), "Earth, Wind & Fire")
+check("a doubled underscore collapses to one space",
+      hygiene.tidy("Calexico__Iron_&_Wine"), "Calexico Iron & Wine")
+# --- multi-value artists ---------------------------------------------------
+check("a three-letter artist splits", hygiene.split_credit("Dax/Elle King"),
+      ["Dax", "Elle King"])
+check("initialisms still do not", hygiene.split_credit("AC/DC"), ["AC/DC"])
+check("nor do two-letter pairs", hygiene.split_credit("T/O"), ["T/O"])
+_mv = hygiene.assess({"artist": "Dax/Elle King", "album_artist": "Dax"})
+check("a collaboration proposes separate values",
+      [p.get("values") for p in _mv if p["field"] == "artists"], [["Dax", "Elle King"]])
+check("and no competing single-string tidy",
+      any(p["field"] == "artist" for p in _mv), False)
+check("an already-split track proposes nothing",
+      hygiene.assess({"artist": "Dax; Elle King", "album_artist": "Dax",
+                      "artist_multi": 1}), [])
+
+_mvf = os.path.join(LIB, "multitest", "m.mp3")
+os.makedirs(os.path.dirname(_mvf), exist_ok=True)
+make(_mvf, "libmp3lame", "192k", 3, 440)
+tag(_mvf, title="MV", artist="Dax/Elle King", albumartist="Dax", album="X")
+changes._write_artists(_mvf, ["Dax", "Elle King"])
+_back = scanner.read_tags(_mvf)
+check("written as real separate values", _back["artist_multi"], 1)
+check("and read back in full, not just the first",
+      _back["artist"], "Dax; Elle King")
+
+check("that band is still one artist, not three",
+      len(hygiene.split_credit("Earth,_Wind_&_Fire")), 1)
 check("an underscored title matches its spaced form",
       normalize("Low_Tide"), normalize("Low Tide"))
 check("an underscored remaster tag is still stripped",

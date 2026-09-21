@@ -9,6 +9,7 @@ and every proposal goes through the normal Review screen before it is written.
 """
 from __future__ import annotations
 
+import json
 import re
 
 from . import db
@@ -25,10 +26,12 @@ SLASH = re.compile(r"\s*[/;|]\s*")
 # off unless asked for, and is staged at low confidence when it is on.
 COMMA = re.compile(r"\s*,\s+")
 
-# Only underscores acting as separators — between two word characters. A
-# leading or trailing one is usually deliberate styling (_moshang), so it
-# survives.
-UNDERSCORE = re.compile(r"(?<=\w)_+(?=\w)")
+# Any underscore with something on both sides of it is a space a filesystem
+# ate. Requiring word characters was too strict: it left "Iron_&_Wine" and
+# "Earth,_Wind_&_Fire" untouched, because & and , are not word characters.
+# A leading or trailing underscore is usually deliberate styling (_moshang)
+# and survives.
+UNDERSCORE = re.compile(r"(?<=\S)_+(?=\S)")
 SPACES = re.compile(r"\s{2,}")
 TRAILING = re.compile(r"[\s,;/|&-]+$")
 
@@ -61,9 +64,10 @@ def _splittable(text: str) -> bool:
     parts = [p.strip() for p in SLASH.split(text) if p.strip()]
     if len(parts) < 2:
         return False
-    # AC/DC, T/O, B/W — initialisms, not two artists. A real artist name is
-    # longer than three characters on both sides of the slash.
-    return all(len(p) > 3 for p in parts)
+    # AC/DC, T/O, B/W — initialisms, not two artists. Two characters or fewer
+    # on a side means an initialism. Three is a real name: requiring four
+    # locked "Dax/Elle King" together as though it were AC/DC.
+    return all(len(p) > 2 for p in parts)
 
 
 def split_credit(text: str, allow_comma: bool = False) -> list[str]:
@@ -108,8 +112,28 @@ def assess(track: dict, allow_comma: bool = False) -> list[dict]:
     parts = split_credit(artist, allow_comma)
     primary = parts[0] if parts else clean_artist
 
+    # 0. A collaboration written as one string becomes several real values.
+    #    Once that proposal exists it supersedes the plain tidy below — both
+    #    write the artist field, and whichever applied second would win, so
+    #    a tidy landing after this one would flatten the list straight back.
+    split_proposed = False
+    if len(parts) > 1 and not track.get("artist_multi"):
+        confidence = 0.9 if len(parts) == 2 else 0.82
+        if allow_comma and COMMA.search(artist):
+            confidence = min(confidence, 0.6)
+        proposals.append({
+            "field": "artists",
+            "old": artist,
+            "new": "; ".join(parts),
+            "values": parts,
+            "confidence": confidence,
+            "reason": f"Stored as {len(parts)} separate artists, so players list "
+                      f"each one instead of treating the credit as a new artist",
+        })
+        split_proposed = True
+
     # 1. The artist tag itself: filename shape, stray separators, spacing.
-    if clean_artist and clean_artist != artist:
+    if clean_artist and clean_artist != artist and not split_proposed:
         proposals.append({
             "field": "artist",
             "old": artist,
@@ -204,9 +228,10 @@ def stage(allow_comma: bool = False, min_confidence: float = 0.0) -> int:
             if exists:
                 continue
             db.execute(
-                "INSERT INTO changes(kind, track_id, field, old_value, new_value, source, "
-                "confidence) VALUES('tag',?,?,?,?,?,?)",
+                "INSERT INTO changes(kind, track_id, field, old_value, new_value, payload, "
+                "source, confidence) VALUES('tag',?,?,?,?,?,?,?)",
                 (track["id"], p["field"], p["old"], p["new"],
+                 json.dumps(p["values"]) if p.get("values") else None,
                  "name-cleanup", round(p["confidence"], 3)),
             )
             staged += 1

@@ -67,6 +67,10 @@ def propose(track_id: int, batch: str | None = None) -> list[dict]:
             continue
         new_value, source, score = resolved
         old_value = track.get(field)
+        # A multi-valued artist was put there deliberately. Any source here
+        # returns a single string, and writing it would flatten the list.
+        if field == "artist" and track.get("artist_multi"):
+            continue
 
         if not _meaningfully_different(field, old_value, new_value):
             continue

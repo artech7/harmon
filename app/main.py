@@ -268,7 +268,31 @@ def change_list(status: str = "pending", kind: str | None = None,
 
 @api.get("/api/lyrics")
 def lyrics_coverage():
-    return lyrics.coverage()
+    return {**lyrics.coverage(),
+            "source": lyrics.base_url(),
+            "self_hosted": lyrics.is_self_hosted()}
+
+
+@api.post("/api/lyrics/test")
+def lyrics_test():
+    """Check whichever LRCLIB is configured actually answers."""
+    import httpx as _httpx
+    url = lyrics.base_url()
+    try:
+        with _httpx.Client(timeout=15, follow_redirects=True) as client:
+            r = client.get(url + "/api/get", params={
+                "artist_name": "Nirvana", "track_name": "Lithium"},
+                headers={"User-Agent": "Harmon/1.0"})
+        if r.status_code in (200, 404):
+            return {"ok": True, "url": url,
+                    "message": f"{url} is answering."
+                               + (" No rate limit applies to your own instance."
+                                  if lyrics.is_self_hosted() else "")}
+        return {"ok": False, "url": url,
+                "message": f"{url} answered {r.status_code}."}
+    except Exception as exc:
+        return {"ok": False, "url": url,
+                "message": f"Could not reach {url}: {str(exc)[:140]}"}
 
 
 @api.get("/api/lyrics/tracks")

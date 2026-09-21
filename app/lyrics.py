@@ -21,7 +21,16 @@ import mutagen
 
 from . import db
 
-LRCLIB = "https://lrclib.net/api/get"
+LRCLIB_PUBLIC = "https://lrclib.net"
+
+
+def base_url() -> str:
+    from .config import get as _cfg
+    return (_cfg()["providers"].get("lrclib_url") or "").rstrip("/") or LRCLIB_PUBLIC
+
+
+def is_self_hosted() -> bool:
+    return base_url() != LRCLIB_PUBLIC
 _lock = threading.Lock()
 _last = 0.0
 
@@ -162,12 +171,15 @@ def _get(params: dict) -> dict | None:
     """
     global _last
     with _lock:
-        wait = MIN_INTERVAL - (time.time() - _last)
+        # Pacing is a courtesy to a free public service. Your own instance
+        # answering your own queries is owed nothing.
+        interval = 0.0 if is_self_hosted() else MIN_INTERVAL
+        wait = interval - (time.time() - _last)
         if wait > 0:
             time.sleep(wait)
         try:
             with httpx.Client(timeout=20, follow_redirects=True) as client:
-                r = client.get(LRCLIB, params=params, headers={
+                r = client.get(base_url() + "/api/get", params=params, headers={
                     "User-Agent": "Harmon/1.0 (https://github.com/artech7/harmon)",
                 })
         finally:

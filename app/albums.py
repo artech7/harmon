@@ -159,6 +159,10 @@ def enrich_album(album_key: str, batch: str | None = None) -> dict:
             value = proposed.get(field)
             if value in (None, ""):
                 continue
+            # A multi-valued artist was put there deliberately; a release
+            # lookup returns one string, and writing it would flatten the list.
+            if field == "artist" and track.get("artist_multi"):
+                continue
             if not enrich._meaningfully_different(field, track.get(field), value):
                 continue
             if track.get(field) not in (None, "") and not cfg["overwrite_existing"]:

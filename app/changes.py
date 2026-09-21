@@ -7,6 +7,7 @@ embeds artwork or removes files.
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import shutil
 
@@ -151,6 +152,53 @@ def approve_all(kind: str | None = None, min_confidence: float = 0.0) -> int:
 
 # --- writers --------------------------------------------------------------
 
+def _write_artists(path: str, names: list[str]) -> None:
+    """Write several artists as several values, not one joined string.
+
+    "Dax/Elle King" as a single string is one artist to every player that does
+    not split on slashes — and splitting on slashes breaks AC/DC. Separate
+    values need no splitting at all, so nothing can be split wrongly.
+
+    ARTISTS is written alongside ARTIST, the MusicBrainz Picard convention,
+    because some servers read that field specifically for linking.
+    """
+    if not names:
+        raise ValueError("no artists to write")
+    ext = os.path.splitext(path)[1].lower()
+
+    if ext == ".mp3":
+        from mutagen.id3 import TPE1, TXXX
+        try:
+            tags = ID3(path)
+        except ID3NoHeaderError:
+            tags = ID3()
+        tags.delall("TPE1")
+        tags.add(TPE1(encoding=3, text=names))
+        tags.delall("TXXX:ARTISTS")
+        tags.add(TXXX(encoding=3, desc="ARTISTS", text=names))
+        # Several values in one frame is an ID3v2.4 feature; v2.3 would join
+        # them with "/" on save and undo the whole point.
+        tags.save(path, v2_version=4)
+    elif ext in (".flac", ".ogg", ".oga", ".opus"):
+        audio = mutagen.File(path)
+        if audio is None:
+            raise ValueError("unreadable audio file")
+        if audio.tags is None:
+            audio.add_tags()
+        audio["artist"] = names
+        audio["artists"] = names
+        audio.save()
+    elif ext in (".m4a", ".mp4", ".m4b", ".alac"):
+        from mutagen.mp4 import MP4FreeForm
+        audio = MP4(path)
+        audio["\xa9ART"] = names
+        audio["----:com.apple.iTunes:ARTISTS"] = [MP4FreeForm(n.encode("utf-8"))
+                                                   for n in names]
+        audio.save()
+    else:
+        raise ValueError(f"multiple artists are not supported for {ext} files")
+
+
 def _write_tag(path: str, field: str, value: str) -> None:
     key = EASY_KEYS.get(field)
     if not key:
@@ -264,7 +312,9 @@ def apply_approved(progress=None) -> dict:
 
     for i, row in enumerate(rows):
         try:
-            if row["kind"] == "tag":
+            if row["kind"] == "tag" and row["field"] == "artists":
+                _write_artists(row["path"], json.loads(row["payload"]))
+            elif row["kind"] == "tag":
                 _write_tag(row["path"], row["field"], row["new_value"])
             elif row["kind"] == "art":
                 _embed_art(row["path"], row["new_value"], min_px)
@@ -291,7 +341,13 @@ def apply_approved(progress=None) -> dict:
             # mtime and size are deliberately left stale. The next scan sees
             # they no longer match the file and re-reads it properly, which is
             # where the content hash gets refreshed — off the critical path.
-            if row["kind"] == "tag" and row["field"] in TRACK_COLUMNS:
+            if row["kind"] == "tag" and row["field"] == "artists":
+                db.execute(
+                    "UPDATE tracks SET artist=?, artist_multi=1 WHERE id=?",
+                    (row["new_value"], row["track_id"]),
+                )
+                result["rekey"].add(row["track_id"])
+            elif row["kind"] == "tag" and row["field"] in TRACK_COLUMNS:
                 db.execute(
                     f"UPDATE tracks SET {row['field']}=? WHERE id=?",
                     (row["new_value"], row["track_id"]),

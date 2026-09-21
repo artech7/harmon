@@ -98,6 +98,24 @@ def _first(tags, *keys) -> str | None:
     return None
 
 
+# Multiple artists are stored as separate values, joined here with "; " so
+# the database has one readable string. The artist_multi flag records that
+# it came from real multiple values rather than a string that happens to
+# contain a semicolon.
+MULTI_JOIN = "; "
+
+
+def _all(tags, key) -> list[str]:
+    try:
+        value = tags.get(key)
+    except Exception:
+        return []
+    if not value:
+        return []
+    values = value if isinstance(value, list) else [value]
+    return [str(v).strip() for v in values if str(v).strip()]
+
+
 def _int(value) -> int | None:
     if value is None:
         return None
@@ -162,7 +180,8 @@ def read_tags(path: str) -> dict:
         "codec": codec,
         "lossless": 1 if codec in LOSSLESS_CODECS else 0,
         "title": _first(tags, "title") or os.path.splitext(os.path.basename(path))[0],
-        "artist": _first(tags, "artist"),
+        "artist": MULTI_JOIN.join(_all(tags, "artist")) or None,
+        "artist_multi": 1 if len(_all(tags, "artist")) > 1 else 0,
         "album_artist": _first(tags, "albumartist", "album artist"),
         "album": _first(tags, "album"),
         "track_no": _int(_first(tags, "tracknumber")),

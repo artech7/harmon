@@ -604,6 +604,57 @@ async function viewLyrics() {
       }))));
   }
 
+  const sourceOut = el('div', { class: 'rmeta' });
+  frag.append(card(
+    cov.self_hosted ? 'Using your own LRCLIB' : 'Using the public LRCLIB',
+    cov.self_hosted
+      ? `Harmon is asking ${cov.source}. No pacing applies to your own instance, so a full pass runs as fast as your NAS answers.`
+      : 'Harmon is asking lrclib.net, paced at roughly three requests a second because they ask for it. You can run your own copy instead — see below.',
+    el('div', { class: 'bar' },
+      el('button', {
+        class: 'sm', onclick: async (e) => {
+          e.target.disabled = true;
+          sourceOut.textContent = 'Checking…';
+          const r = await api('/lyrics/test', { method: 'POST', body: {} });
+          sourceOut.textContent = r.message;
+          sourceOut.className = 'rmeta';
+          e.target.disabled = false;
+        },
+      }, 'Test the connection'),
+      sourceOut),
+    textField({
+      label: 'Your own LRCLIB address',
+      value: state.config?.providers?.lrclib_url || '',
+      placeholder: 'http://192.168.1.50:3300',
+      blurb: 'Leave empty to use lrclib.net. Include the port, no trailing slash.',
+      save: async (v) => {
+        state.config = await api('/config', { method: 'PUT',
+          body: { providers: { lrclib_url: v } } });
+      },
+    }),
+    el('details', {},
+      el('summary', { class: 'rmeta', style: 'cursor:pointer' },
+        'How to run your own — worth it for a large library'),
+      el('div', { class: 'lede', style: 'margin-top:12px' },
+        'LRCLIB is open source and publishes its whole database. Running it yourself removes the pacing entirely, which turns a two-hour pass into minutes. The cost is disk: the dump is over 40 GB compressed and a good deal more once unpacked, so check you have the room before starting.'),
+      el('div', { class: 'rows' },
+        [['Build the image',
+          'On the NAS: git clone https://github.com/tranxuanthang/lrclib, then docker build -t lrclib-rs:latest .'],
+         ['Get the database',
+          'Download the newest dump from lrclib.net/db-dumps. It is a gzipped SQLite file — decompress it, and give the decompression somewhere with plenty of free space.'],
+         ['Put it where the server looks',
+          'Create a folder for it, drop the decompressed .sqlite3 file in, and check the repo\'s Dockerfile for the filename the entrypoint expects — it passes --database to the server.'],
+         ['Run it',
+          'docker run -d --name lrclib -v /volume1/docker/lrclib:/data -p 3300:3300 -e LRCLIB_LOG=info --restart unless-stopped lrclib-rs:latest'],
+         ['Point Harmon at it',
+          'Put http://<nas-ip>:3300 in the field above and press Test the connection. Once it answers, pacing is dropped and lookups run at full speed.']]
+          .map(([title, detail], i) => el('div', { class: 'row', style: 'grid-template-columns:auto 1fr' },
+            el('span', { class: 'chip mono' }, i + 1),
+            el('div', {},
+              el('div', { class: 'rname' }, title),
+              el('div', { class: 'rmeta', style: 'white-space:normal' }, detail)))))),
+  ));
+
   frag.append(card('Fetch from LRCLIB',
     'LRCLIB is a free, open lyrics database — no key, no account. Harmon matches on artist, title, album and length, so a radio edit does not get the album version\'s timings. Files are written next to each track and nothing touches the audio itself. Anything found is staged in Review first.',
     el('div', { class: 'bar' },
@@ -1093,9 +1144,11 @@ async function viewMetadata() {
             el('div', { class: 'row', style: 'grid-template-columns:1fr auto auto' },
               el('div', {},
                 el('div', { class: 'diff' },
-                  el('span', { class: 'rmeta' }, it.field.replace('_', ' ')),
+                  el('span', { class: 'rmeta' },
+                    it.field === 'artists' ? 'split into' : it.field.replace('_', ' ')),
                   it.old ? el('s', {}, it.old) : el('span', { class: 'rmeta' }, '(empty)'),
-                  el('em', {}, it.new)),
+                  el('em', {}, it.field === 'artists'
+                    ? it.new.split('; ').join('  +  ') : it.new)),
                 el('div', { class: 'rmeta' }, it.reason)),
               chip(`${it.tracks} tracks`),
               el('span', { class: 'chip mono' }, `${Math.round(it.confidence * 100)}%`)))));
@@ -1239,6 +1292,9 @@ const selected = new Set();
    about the kind of change rather than about thirteen thousand rows. */
 function describeGroup(g) {
   const n = num(g.n);
+  if (g.kind === 'tag' && g.field === 'artists') {
+    return `Split ${n} collaboration credits into separate artists`;
+  }
   const FIELD = {
     year: 'release year', track_no: 'track number', disc_no: 'disc number',
     album_artist: 'album artist', artist: 'artist', album: 'album',
