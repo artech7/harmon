@@ -116,6 +116,20 @@ const hours = (seconds) => {
 
 const basename = (p) => (p || '').split('/').pop();
 
+/* A multi-artist value is stored in the database joined with "; ", but the
+   file receives separate values with no separator at all. Showing the joined
+   string makes it look like "/" is just being swapped for ";". */
+function shownValue(field, value) {
+  if (field === 'artists' && value) {
+    return value.split('; ').join('  +  ');
+  }
+  return value;
+}
+
+function shownField(field) {
+  return field === 'artists' ? 'split into' : (field || '').replace('_', ' ');
+}
+
 function elapsed(startedAt) {
   const secs = Math.max(0, Math.floor(Date.now() / 1000 - startedAt));
   if (secs < 60) return `${secs}s`;
@@ -1402,7 +1416,7 @@ async function showAllInGroup(g, host) {
         el('div', { class: 'rmeta' }, [it.artist, it.album].filter(Boolean).join(' — ')),
         el('div', { class: 'diff' },
           it.old_value ? el('s', {}, it.old_value) : el('span', { class: 'rmeta' }, '(empty)'),
-          el('em', {}, g.kind === 'art' ? 'cover image' : it.new_value))),
+          el('em', {}, g.kind === 'art' ? 'cover image' : shownValue(g.field, it.new_value)))),
       el('button', {
         class: 'jump', title: it.folder,
         onclick: () => openFolderFor(it.track_id),
@@ -1518,7 +1532,7 @@ async function reviewGrouped() {
           el('div', { class: 'rmeta' }, [sm.artist, sm.album].filter(Boolean).join(' — ')),
           el('div', { class: 'diff' },
             sm.old_value ? el('s', {}, sm.old_value) : el('span', { class: 'rmeta' }, '(empty)'),
-            el('em', {}, g.kind === 'art' ? 'cover image' : sm.new_value))),
+            el('em', {}, g.kind === 'art' ? 'cover image' : shownValue(g.field, sm.new_value)))),
         el('button', {
           class: 'jump', onclick: () => openFolderFor(sm.track_id),
         }, 'Show folder'),
@@ -1628,9 +1642,12 @@ function changeRow(c) {
 
   if (c.kind === 'tag') {
     detail = el('div', { class: 'diff' },
-      el('span', { class: 'rmeta' }, c.field.replace('_', ' ')),
+      el('span', { class: 'rmeta' }, shownField(c.field)),
       c.old_value ? el('s', {}, c.old_value) : el('span', { class: 'rmeta' }, '(empty)'),
-      el('em', {}, c.new_value));
+      el('em', {}, shownValue(c.field, c.new_value)),
+      c.field === 'artists'
+        ? el('span', { class: 'rmeta' }, 'separate artists, no separator stored')
+        : null);
   } else if (c.kind === 'art') {
     let host = c.source || 'a cover source';
     try { host = new URL(c.new_value).hostname; } catch { /* not a URL */ }
