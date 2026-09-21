@@ -176,39 +176,96 @@ def assess(track: dict, allow_comma: bool = False) -> list[dict]:
     return proposals
 
 
-def preview(limit: int = 300, allow_comma: bool = False) -> dict:
-    """A dry run: what would change, grouped so it can be read at a glance."""
-    rows = db.query("SELECT * FROM tracks WHERE missing=0")
-    by_change: dict[tuple, dict] = {}
-    tracks_touched = set()
+def _decided() -> set[tuple]:
+    """Every (track, field, value) that already has a decision.
 
-    for row in rows:
-        for p in assess(dict(row), allow_comma):
-            key = (p["field"], p["old"] or "", p["new"])
-            entry = by_change.setdefault(key, {
-                "field": p["field"], "old": p["old"], "new": p["new"],
-                "reason": p["reason"], "confidence": p["confidence"], "tracks": 0,
-            })
-            entry["tracks"] += 1
-            tracks_touched.add(row["id"])
-
-    items = sorted(by_change.values(), key=lambda e: -e["tracks"])
-    distinct_before = len({
-        (r["album_artist"] or r["artist"] or "").lower() for r in rows
-    })
-    distinct_after = len({
-        (next((p["new"] for p in assess(dict(r), allow_comma)
-               if p["field"] == "album_artist"), None)
-         or r["album_artist"] or r["artist"] or "").lower()
-        for r in rows
-    })
-
+    Rejections count. Leaving them out meant anything you turned down came
+    straight back on the next run, which is why this needed running over and
+    over to get anywhere.
+    """
     return {
-        "items": items[:limit],
-        "total_changes": sum(e["tracks"] for e in by_change.values()),
-        "tracks": len(tracks_touched),
-        "artists_before": distinct_before,
-        "artists_after": distinct_after,
+        (r["track_id"], r["field"], r["new_value"])
+        for r in db.query(
+            "SELECT track_id, field, new_value FROM changes WHERE kind='tag' "
+            "AND status IN ('pending','approved','rejected')"
+        )
+    }
+
+
+def _proposals(allow_comma: bool = False) -> dict[tuple, dict]:
+    """Every undecided proposal in the library, grouped by what it does."""
+    decided = _decided()
+    groups: dict[tuple, dict] = {}
+    for row in db.query("SELECT * FROM tracks WHERE missing=0"):
+        track = dict(row)
+        for p in assess(track, allow_comma):
+            if (track["id"], p["field"], p["new"]) in decided:
+                continue
+            key = (p["field"], p["old"] or "", p["new"])
+            g = groups.setdefault(key, {
+                "field": p["field"], "old": p["old"], "new": p["new"],
+                "values": p.get("values"), "reason": p["reason"],
+                "confidence": p["confidence"], "track_ids": [],
+            })
+            g["track_ids"].append(track["id"])
+    return groups
+
+
+def decide(field: str, old: str | None, new: str, status: str,
+           allow_comma: bool = False) -> int:
+    """Approve or deny one proposal across every track it applies to.
+
+    Denials are stored, so they stay denied. Approvals land as approved and
+    still need Apply to reach your files.
+    """
+    if status not in ("approved", "rejected"):
+        raise ValueError("status must be approved or rejected")
+    group = _proposals(allow_comma).get((field, old or "", new))
+    if not group:
+        return 0
+    for track_id in group["track_ids"]:
+        db.execute(
+            "INSERT INTO changes(kind, track_id, field, old_value, new_value, payload, "
+            "source, confidence, status) VALUES('tag',?,?,?,?,?,'name-cleanup',?,?)",
+            (track_id, field, old, new,
+             json.dumps(group["values"]) if group.get("values") else None,
+             round(group["confidence"], 3), status),
+        )
+    return len(group["track_ids"])
+
+
+def decide_all(status: str, allow_comma: bool = False) -> int:
+    total = 0
+    for (field, old, new) in list(_proposals(allow_comma).keys()):
+        total += decide(field, old or None, new, status, allow_comma)
+    return total
+
+
+def preview(limit: int = 100, allow_comma: bool = False, offset: int = 0) -> dict:
+    """Every undecided proposal, paged. Nothing already approved, pending or
+    denied comes back, so each run shows only what still needs a decision."""
+    groups = _proposals(allow_comma)
+    items = sorted(groups.values(), key=lambda g: -len(g["track_ids"]))
+    rows = db.query("SELECT * FROM tracks WHERE missing=0")
+    artists_before = len({(r["album_artist"] or r["artist"] or "").lower() for r in rows})
+    after = {}
+    for r in rows:
+        after[r["id"]] = (r["album_artist"] or r["artist"] or "").lower()
+    for g in items:
+        if g["field"] == "album_artist":
+            for tid in g["track_ids"]:
+                after[tid] = g["new"].lower()
+
+    page = items[offset:offset + limit]
+    return {
+        "items": [{**{k: v for k, v in g.items() if k != "track_ids"},
+                   "tracks": len(g["track_ids"])} for g in page],
+        "total_items": len(items),
+        "offset": offset,
+        "total_changes": sum(len(g["track_ids"]) for g in items),
+        "tracks": len({t for g in items for t in g["track_ids"]}),
+        "artists_before": artists_before,
+        "artists_after": len(set(after.values())),
     }
 
 
@@ -226,6 +283,12 @@ def stage(allow_comma: bool = False, min_confidence: float = 0.0) -> int:
                 "AND status IN ('pending','approved')", (track["id"], p["field"]),
             )
             if exists:
+                continue
+            refused = db.one(
+                "SELECT id FROM changes WHERE track_id=? AND kind='tag' AND field=? "
+                "AND new_value=? AND status='rejected'", (track["id"], p["field"], p["new"]),
+            )
+            if refused:
                 continue
             db.execute(
                 "INSERT INTO changes(kind, track_id, field, old_value, new_value, payload, "

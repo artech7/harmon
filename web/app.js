@@ -1125,6 +1125,96 @@ async function viewMetadata() {
 
   const hygieneOut = el('div', {});
   let allowComma = false;
+  let hygieneOffset = 0;
+  const PAGE = 100;
+
+  /* Every undecided proposal, a page at a time, each with its own decision.
+     Anything already decided — including anything denied — stays out, so a
+     second look only ever shows what still needs you. */
+  async function paintHygiene() {
+    hygieneOut.innerHTML = '';
+    hygieneOut.append(el('div', { class: 'empty' }, 'Checking every track…'));
+    const r = await api(`/hygiene/preview?allow_comma=${allowComma}` +
+                        `&limit=${PAGE}&offset=${hygieneOffset}`);
+    hygieneOut.innerHTML = '';
+
+    if (!r.total_items) {
+      hygieneOut.append(el('div', { class: 'empty' },
+        el('b', {}, 'Nothing left to decide'),
+        'Every artist name has either been tidied or had a decision made about it.'));
+      return;
+    }
+
+    hygieneOut.append(el('div', { class: 'stats' },
+      stat('Artists now', num(r.artists_before)),
+      stat('If all approved', num(r.artists_after), null, 'good'),
+      stat('Still to decide', num(r.total_items), `${num(r.total_changes)} tracks`)));
+
+    const decideOne = async (it, status, row) => {
+      const res = await api('/hygiene/decide', {
+        method: 'POST',
+        body: { field: it.field, old: it.old, new: it.new, status, allow_comma: allowComma },
+      });
+      row.style.opacity = '.45';
+      row.querySelectorAll('button').forEach((b) => { b.disabled = true; });
+      row.querySelector('.hyg-state').textContent =
+        status === 'approved' ? `approved · ${num(res.updated)} tracks` : 'denied — will not come back';
+      poll();
+    };
+
+    hygieneOut.append(el('div', { class: 'bar' },
+      el('button', {
+        class: 'go sm', onclick: async () => {
+          if (!confirm(`Approve all ${num(r.total_items)} name changes across ${num(r.total_changes)} tracks?\n\nNothing is written yet — you can undo this from Review until you press Apply.`)) return;
+          const res = await api('/hygiene/decide-all', {
+            method: 'POST', body: { status: 'approved', allow_comma: allowComma } });
+          toast(`${num(res.updated)} tracks approved.`);
+          hygieneOffset = 0; paintHygiene(); poll();
+        },
+      }, `Approve all ${num(r.total_items)}`),
+      el('button', {
+        class: 'sm', onclick: async () => {
+          if (!confirm(`Deny all ${num(r.total_items)}? They will not be suggested again.`)) return;
+          const res = await api('/hygiene/decide-all', {
+            method: 'POST', body: { status: 'rejected', allow_comma: allowComma } });
+          toast(`${num(res.updated)} tracks denied.`);
+          hygieneOffset = 0; paintHygiene();
+        },
+      }, 'Deny all'),
+      el('div', { class: 'push' }),
+      el('span', { class: 'rmeta' },
+        `${num(r.offset + 1)}–${num(r.offset + r.items.length)} of ${num(r.total_items)}`)));
+
+    const rows = el('div', { class: 'rows' });
+    r.items.forEach((it) => {
+      const row = el('div', { class: 'row', style: 'grid-template-columns:1fr auto auto auto' },
+        el('div', {},
+          el('div', { class: 'diff' },
+            el('span', { class: 'rmeta' }, shownField(it.field)),
+            it.old ? el('s', {}, it.old) : el('span', { class: 'rmeta' }, '(empty)'),
+            el('em', {}, shownValue(it.field, it.new))),
+          el('div', { class: 'rmeta', style: 'white-space:normal' }, it.reason),
+          el('div', { class: 'rmeta hyg-state' }, '')),
+        chip(`${num(it.tracks)} tracks`),
+        el('button', { class: 'go sm', onclick: () => decideOne(it, 'approved', row) }, 'Approve'),
+        el('button', { class: 'sm', onclick: () => decideOne(it, 'rejected', row) }, 'Deny'));
+      rows.append(row);
+    });
+    hygieneOut.append(rows);
+
+    // Decisions remove items from the list, so "next page" re-reads rather
+    // than stepping an offset that the decisions have already shifted.
+    hygieneOut.append(el('div', { class: 'bar', style: 'margin-top:14px' },
+      hygieneOffset > 0 ? el('button', {
+        class: 'sm', onclick: () => { hygieneOffset = Math.max(0, hygieneOffset - PAGE); paintHygiene(); },
+      }, 'Previous page') : null,
+      el('button', {
+        class: 'sm', onclick: () => { hygieneOffset = 0; paintHygiene(); },
+      }, 'Refresh — show what is left'),
+      r.offset + r.items.length < r.total_items ? el('button', {
+        class: 'sm', onclick: () => { hygieneOffset += PAGE; paintHygiene(); },
+      }, 'Next page') : null));
+  }
 
   const hygieneCard = card('Tidy up artist names',
     'Filename-style names like 3_Doors_Down, and collaborations written into the album artist, are what shatter a library into hundreds of one-album artists. This reshapes what is already in your tags — it invents nothing, and changes nothing until you approve it in Review.',
@@ -1141,41 +1231,8 @@ async function viewMetadata() {
           e.target.disabled = true;
           hygieneOut.innerHTML = '';
           hygieneOut.append(el('div', { class: 'empty' }, 'Checking every track…'));
-          const r = await api(`/hygiene/preview?allow_comma=${allowComma}&limit=120`);
-          hygieneOut.innerHTML = '';
-          if (!r.total_changes) {
-            hygieneOut.append(el('div', { class: 'empty' },
-              el('b', {}, 'Your artist names are already tidy'),
-              'Nothing to reshape.'));
-            e.target.disabled = false;
-            return;
-          }
-          hygieneOut.append(el('div', { class: 'stats' },
-            stat('Artists now', num(r.artists_before)),
-            stat('After cleanup', num(r.artists_after), null, 'good'),
-            stat('Changes', num(r.total_changes), `across ${num(r.tracks)} tracks`)));
-          hygieneOut.append(el('div', { class: 'rows' }, r.items.map((it) =>
-            el('div', { class: 'row', style: 'grid-template-columns:1fr auto auto' },
-              el('div', {},
-                el('div', { class: 'diff' },
-                  el('span', { class: 'rmeta' },
-                    it.field === 'artists' ? 'split into' : it.field.replace('_', ' ')),
-                  it.old ? el('s', {}, it.old) : el('span', { class: 'rmeta' }, '(empty)'),
-                  el('em', {}, it.field === 'artists'
-                    ? it.new.split('; ').join('  +  ') : it.new)),
-                el('div', { class: 'rmeta' }, it.reason)),
-              chip(`${it.tracks} tracks`),
-              el('span', { class: 'chip mono' }, `${Math.round(it.confidence * 100)}%`)))));
-          hygieneOut.append(el('div', { class: 'bar', style: 'margin:16px 0 0' },
-            el('button', {
-              class: 'go', onclick: async () => {
-                const res = await api('/hygiene/stage', {
-                  method: 'POST', body: { allow_comma: allowComma },
-                });
-                toast(`${res.staged} name changes staged. Approve them in Review.`);
-                poll();
-              },
-            }, 'Stage these for review')));
+          hygieneOffset = 0;
+          await paintHygiene();
           e.target.disabled = false;
         },
       }, 'Show me what would change')),

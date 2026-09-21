@@ -161,6 +161,12 @@ is usually two problems, neither of which is missing artwork:
 - Collaborations written into `album_artist`, so every guest gets their own
   artist entry.
 
+The preview lists every undecided name change in the library, a hundred at a
+time, each with its own Approve and Deny, plus Approve all and Deny all.
+Approving lands the change as approved — Apply still writes it. Denying is
+remembered: a denied suggestion does not come back on the next run, which is
+what used to make this need running over and over.
+
 Metadata for Jellyfin, Plex and Navidrome follows one convention: `artist`
 holds the full credit, `album_artist` holds the primary artist alone. Harmon's
 Metadata screen proposes exactly that, plus mechanical name cleanup.

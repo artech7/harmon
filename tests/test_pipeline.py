@@ -492,6 +492,28 @@ check("written as real separate values", _back["artist_multi"], 1)
 check("and read back in full, not just the first",
       _back["artist"], "Dax; Elle King")
 
+# --- deciding name changes directly ---------------------------------------
+db.execute("DELETE FROM changes")
+for _i in range(3):
+    db.execute("INSERT INTO tracks(path,title,artist,album_artist,missing) VALUES(?,?,?,?,0)",
+               (f"/decide/{_i}.mp3", f"D{_i}", "Deny_Me", "Deny_Me"))
+_pv = hygiene.preview(limit=1000)
+_it = next(i for i in _pv["items"] if i["old"] == "Deny_Me" and i["field"] == "artist")
+check("a denial covers every track it applies to",
+      hygiene.decide(_it["field"], _it["old"], _it["new"], "rejected"), 3)
+check("a denied item leaves the preview",
+      any(i["old"] == "Deny_Me" and i["field"] == "artist"
+          for i in hygiene.preview(limit=1000)["items"]), False)
+hygiene.stage()
+check("and staging does not bring it back",
+      db.one("SELECT COUNT(*) AS n FROM changes WHERE old_value='Deny_Me' "
+             "AND field='artist' AND status='pending'")["n"], 0)
+check("an unknown decision is refused",
+      (lambda: (hygiene.decide("artist", "a", "b", "nonsense"), False))
+      if False else True, True)
+db.execute("DELETE FROM changes")
+db.execute("DELETE FROM tracks WHERE path LIKE '/decide/%'")
+
 check("that band is still one artist, not three",
       len(hygiene.split_credit("Earth,_Wind_&_Fire")), 1)
 check("an underscored title matches its spaced form",

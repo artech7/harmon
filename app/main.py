@@ -162,8 +162,27 @@ def albums_plan():
 
 
 @api.get("/api/hygiene/preview")
-def hygiene_preview(allow_comma: bool = False, limit: int = 300):
-    return hygiene.preview(limit, allow_comma)
+def hygiene_preview(allow_comma: bool = False, limit: int = 100, offset: int = 0):
+    return hygiene.preview(limit, allow_comma, offset)
+
+
+@api.post("/api/hygiene/decide")
+def hygiene_decide(payload: dict = Body(...)):
+    try:
+        n = hygiene.decide(payload["field"], payload.get("old"), payload["new"],
+                           payload["status"], bool(payload.get("allow_comma")))
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    return {"updated": n}
+
+
+@api.post("/api/hygiene/decide-all")
+def hygiene_decide_all(payload: dict = Body(...)):
+    try:
+        n = hygiene.decide_all(payload["status"], bool(payload.get("allow_comma")))
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    return {"updated": n}
 
 
 @api.post("/api/hygiene/stage")
